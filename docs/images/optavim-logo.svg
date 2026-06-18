@@ -1,0 +1,22 @@
+<svg width="380" height="100" viewBox="0 0 380 100" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Optavim">
+  <defs>
+    <linearGradient id="ovVisionFull" x1="8" y1="8" x2="92" y2="92" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3B82F6"></stop>
+      <stop offset="1" stop-color="#22D3EE"></stop>
+    </linearGradient>
+    <mask id="ovApertureFull">
+      <path d="M96,50 L73,10.16 L27,10.16 L4,50 L27,89.84 L73,89.84 Z" fill="#fff"></path>
+      <path d="M63.86,42 L50,34 L36.14,42 L36.14,58 L50,66 L63.86,58 Z" fill="#000"></path>
+      <g stroke="#000" stroke-width="2.4" stroke-linecap="round">
+        <line x1="63.86" y1="42" x2="96" y2="50"></line>
+        <line x1="50" y1="34" x2="73" y2="10.16"></line>
+        <line x1="36.14" y1="42" x2="27" y2="10.16"></line>
+        <line x1="36.14" y1="58" x2="4" y2="50"></line>
+        <line x1="50" y1="66" x2="27" y2="89.84"></line>
+        <line x1="63.86" y1="58" x2="73" y2="89.84"></line>
+      </g>
+    </mask>
+  </defs>
+  <rect x="0" y="0" width="100" height="100" fill="url(#ovVisionFull)" mask="url(#ovApertureFull)"></rect>
+  <text x="116" y="63" font-family="&#39;Space Grotesk&#39;, system-ui, sans-serif" font-size="44" font-weight="700" letter-spacing="-1.4" fill="#FFFFFF">Optavim</text>
+</svg>

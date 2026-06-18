@@ -1,0 +1,46 @@
+{
+  "uid": "opta-k8s-wl",
+  "title": "OPTAVIM — Applications détaillées",
+  "tags": ["optavim", "k8s"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-3h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0},
+    {"name": "namespace", "type": "query", "datasource": {"type": "prometheus", "uid": "$datasource"}, "query": "label_values(kube_pod_info, namespace)", "current": {"text": "All", "value": "$__all"}, "includeAll": true, "multi": true}
+  ]},
+  "links": [{"title": "Cluster", "url": "/d/opta-k8s-cluster", "type": "link", "icon": "external link"}],
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "CPU par application",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\",container!=\"\",container!=\"POD\"}[5m]))", "refId": "A", "legendFormat": "{{pod}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Mémoire par application",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum by (pod) (container_memory_working_set_bytes{namespace=~\"$namespace\",container!=\"\",container!=\"POD\"})", "refId": "A", "legendFormat": "{{pod}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "bytes"}}
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Trafic entrant",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum by (pod) (rate(container_network_receive_bytes_total{namespace=~\"$namespace\"}[5m]))", "refId": "A", "legendFormat": "{{pod}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "Bps"}}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Trafic sortant",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum by (pod) (rate(container_network_transmit_bytes_total{namespace=~\"$namespace\"}[5m]))", "refId": "A", "legendFormat": "{{pod}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "Bps"}}
+    }
+  ]
+}

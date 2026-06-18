@@ -1,0 +1,48 @@
+{
+  "uid": "opta-storage",
+  "title": "OPTAVIM — Stockage",
+  "tags": ["optavim", "storage"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0}
+  ]},
+  "links": [{"title": "Executive", "url": "/d/opta-exec", "type": "link", "icon": "external link"}],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Stockage fichiers",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "probe_success{instance=\"10.1.30.100:2049\"}", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#22D3EE", "value": 1}]}, "mappings": [{"options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}, "type": "value"}]}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Espace sauvegardes utilisé",
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum(minio_bucket_usage_total_bytes)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#3B82F6"}, "unit": "bytes"}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Nombre de sauvegardes",
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum(minio_bucket_usage_object_total)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#22D3EE"}, "unit": "short"}}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Remplissage des volumes",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "100 * (kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes)", "refId": "A", "legendFormat": "{{persistentvolumeclaim}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "percent", "min": 0, "max": 100}}
+    }
+  ]
+}

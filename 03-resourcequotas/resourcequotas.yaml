@@ -1,0 +1,92 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota-auth
+  namespace: auth
+spec:
+  hard:
+    requests.cpu: "1"
+    requests.memory: 1024Mi
+    limits.cpu: "1.2"
+    limits.memory: 1228Mi
+    pods: "4"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota-databases
+  namespace: databases
+spec:
+  hard:
+    requests.cpu: "1.65"
+    requests.memory: 2528Mi
+    limits.cpu: "2"
+    limits.memory: 3034Mi
+    pods: "6"
+    persistentvolumeclaims: "4"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota-apps
+  namespace: apps
+spec:
+  hard:
+    # 3 apps × 2 replicas = 6 pods en régime stable
+    # + maxSurge=1 par deployment = jusqu'à 9 pods lors d'un rolling restart
+    # request: 256Mi × 9 = 2304Mi, 250m × 9 = 2250m
+    # limit:   512Mi × 9 = 4608Mi, 500m × 9 = 4500m
+    # The spec said 256Mi without splitting request/limit; we keep 512Mi as the
+    # limit to absorb PHP+Apache load spikes.
+    requests.cpu: "2.5"
+    requests.memory: 2304Mi
+    limits.cpu: "5"
+    limits.memory: 5Gi
+    pods: "12"
+    persistentvolumeclaims: "5"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota-monitoring
+  namespace: monitoring
+spec:
+  hard:
+    # Prometheus + Grafana + kube-state-metrics + node-exporter (DS sur 6 nodes)
+    # requests : 300+100+50+6×50  = 750m cpu   |  512+256+64+6×64 = 1216Mi
+    # limits   : 500+200+150+6×150 = 1750m cpu |  1024+512+128+6×128 = 2432Mi
+    requests.cpu: "1"
+    requests.memory: 1536Mi
+    limits.cpu: "2"
+    limits.memory: 3Gi
+    pods: "12"
+    persistentvolumeclaims: "3"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota-security
+  namespace: security
+spec:
+  hard:
+    # Wazuh stack : indexer (OpenSearch, ~2Gi limit) + manager (1Gi) + dashboard (512Mi)
+    # OpenSearch heap = 1Gi, container limit = 2Gi to cover the JVM overhead
+    requests.cpu: "1.2"
+    requests.memory: 2500Mi
+    limits.cpu: "2"
+    limits.memory: 5Gi
+    pods: "8"
+    persistentvolumeclaims: "3"
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota-ingress
+  namespace: ingress
+spec:
+  hard:
+    requests.cpu: "0.4"
+    requests.memory: 256Mi
+    limits.cpu: "0.48"
+    limits.memory: 307Mi
+    pods: "4"

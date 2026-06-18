@@ -1,0 +1,61 @@
+{
+  "uid": "opta-ingress",
+  "title": "OPTAVIM — Trafic web",
+  "tags": ["optavim", "net"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-3h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0}
+  ]},
+  "links": [{"title": "Executive", "url": "/d/opta-exec", "type": "link", "icon": "external link"}],
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Requêtes par seconde",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum by (entrypoint) (rate(traefik_entrypoint_requests_total[5m]))", "refId": "A", "legendFormat": "{{entrypoint}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "reqps"}}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Erreurs serveur (5xx)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum by (entrypoint) (rate(traefik_entrypoint_requests_total{code=~\"5..\"}[5m]))", "refId": "A", "legendFormat": "{{entrypoint}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#EF4444"}, "unit": "reqps"}}
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Temps de réponse (p95)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (entrypoint, le) (rate(traefik_entrypoint_request_duration_seconds_bucket[5m])))", "refId": "A", "legendFormat": "{{entrypoint}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "s"}}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "Connexions ouvertes",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "traefik_entrypoint_open_connections", "refId": "A", "legendFormat": "{{entrypoint}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}}
+    },
+    {"id": 10, "type": "row", "title": "Répartiteur frontal", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 16}},
+    {
+      "id": 11, "type": "stat", "title": "Service répartiteur",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 17},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "haproxy_up", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#22D3EE", "value": 1}]}, "mappings": [{"options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}, "type": "value"}]}}
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "État des backends",
+      "gridPos": {"h": 8, "w": 16, "x": 8, "y": 17},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "haproxy_backend_status", "refId": "A", "legendFormat": "{{backend}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}}}
+    }
+  ]
+}

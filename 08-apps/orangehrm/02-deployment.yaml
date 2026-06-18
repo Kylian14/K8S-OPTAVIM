@@ -1,0 +1,232 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orangehrm
+  namespace: apps
+  labels:
+    app: orangehrm
+    project: optavim
+spec:
+  selector:
+    app: orangehrm
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orangehrm
+  namespace: apps
+  labels:
+    app: orangehrm
+    project: optavim
+    phase: "6"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: orangehrm
+  template:
+    metadata:
+      labels:
+        app: orangehrm
+        project: optavim
+      annotations:
+        # The official orangehrm apache image starts as root to fix web-root
+        # permissions, then serves via apache; the copy-source initContainer
+        # also chowns the PVC. runAsNonRoot or a read-only root FS break both,
+        # so we skip them. The pod stays isolated by namespace + NetworkPolicy.
+        ignore-check.kube-linter.io/run-as-non-root: "apache image needs a root entrypoint and a writable web root; copy-source initContainer chowns the PVC; isolated by namespace + NetworkPolicy"
+        ignore-check.kube-linter.io/no-read-only-root-fs: "apache image writes the web root and its runtime dirs; isolated by namespace + NetworkPolicy"
+    spec:
+      # Pod-level seccomp baseline (RuntimeDefault) for every container and init
+      # container. We don't set runAsNonRoot: the apache entrypoint needs root.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: orangehrm
+                topologyKey: kubernetes.io/hostname
+      # The orangehrm image ships its source under /var/www/html; mounting the PVC
+      # over it empties the directory. This initContainer copies the image source
+      # to the PVC on first boot (idempotent: skip if already done).
+      initContainers:
+        - name: copy-source
+          image: orangehrm/orangehrm:5.7
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /target/index.php ]; then
+                echo "First boot : copying OrangeHRM source to PVC..."
+                cp -a /var/www/html/. /target/
+                chown -R www-data:www-data /target
+                echo "Done."
+              else
+                echo "Source already present on PVC, skipping copy."
+              fi
+          # Needs root + CAP_CHOWN to chown the copied source to www-data on the
+          # PVC, so capabilities are NOT dropped and it is NOT forced non-root.
+          # seccomp + no-priv-escalation are still safe.
+          # trivy:ignore:KSV-0014 runs as root for cp -a + chown of web source onto PVC; isolated by namespace + NetworkPolicy
+          # trivy:ignore:KSV-0118 run-as-non-root unsafe: needs root to chown PVC contents to www-data
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              # Drop ALL, re-add only CHOWN (required for `chown -R www-data /target`).
+              drop: ["ALL"]
+              add: ["CHOWN"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /target
+        # Append AD CS root CA to the system bundle so PHP cURL (OpenID Connect
+        # to https://auth.optavim.corp) trusts the AD CS-signed cert.
+        - name: inject-ca
+          image: orangehrm/orangehrm:5.7
+          command:
+            - sh
+            - -c
+            - |
+              cp /etc/ssl/certs/ca-certificates.crt /ca-bundle/ca-certificates.crt
+              cat /ca/optavim-ca.pem >> /ca-bundle/ca-certificates.crt
+              echo "CA AD CS appended to bundle ($(wc -l < /ca-bundle/ca-certificates.crt) lines total)"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+            readOnlyRootFilesystem: true   # only writes to /ca-bundle (emptyDir)
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "64Mi"}
+          volumeMounts:
+            - name: ldap-ca
+              mountPath: /ca/optavim-ca.pem
+              subPath: optavim-ca.pem
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /ca-bundle
+      containers:
+        - name: orangehrm
+          image: orangehrm/orangehrm:5.7
+          # Conservative hardening: seccomp RuntimeDefault + no privilege
+          # escalation are safe. Capabilities NOT dropped and NOT forced
+          # non-root: the entrypoint needs root to fixup web-root perms before
+          # apache drops to www-data. Forcing those crash-loops the pod.
+          # trivy:ignore:KSV-0014 official apache image requires root entrypoint + writable web root; isolated by namespace + NetworkPolicy
+          # trivy:ignore:KSV-0118 run-as-non-root unsafe: orangehrm entrypoint fixes web-root perms as root before dropping to www-data
+          # apache binds :80 (NET_BIND_SERVICE) + entrypoint chown/setuid of the web root.
+          # drop:[ALL] alone made the :80 bind fail (observed in runtime testing).
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "NET_BIND_SERVICE"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: DATABASE_HOST
+              value: "galera.databases.svc.cluster.local"
+            - name: DATABASE_PORT
+              value: "3306"
+            - name: DATABASE_NAME
+              value: "orangehrm_db"
+            - name: DATABASE_USER
+              value: "orangehrm"
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orangehrm-secret
+                  key: DATABASE_PASSWORD
+            - name: ORANGEHRM_ADMIN_USER_NAME
+              value: "admin"
+            - name: ORANGEHRM_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: orangehrm-secret
+                  key: ORANGEHRM_ADMIN_PASSWORD
+            # Skip self-signed cert validation for LDAPS to AD (10.1.20.x:636).
+            # The LDAP→OrangeHRM sync (CronJob orangehrm-ldap-sync) goes out to AD
+            # over ldaps:// with the self-signed AD CS cert.
+            - name: LDAPTLS_REQCERT
+              value: "never"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/html
+            # PHP LDAP trusts the AD CS cert for auth via DC-AD-DC-01:636
+            # ConfigMap "orangehrm-ldap-ca" created via kubectl (see README §LDAP)
+            - name: ldap-ca
+              mountPath: /etc/ldap/ldap.conf
+              subPath: ldap.conf
+              readOnly: true
+            - name: ldap-ca
+              mountPath: /etc/ldap/optavim-ca.pem
+              subPath: optavim-ca.pem
+              readOnly: true
+            # CA bundle augmented with the AD CS root (generated by initContainer
+            # inject-ca) → PHP cURL trusts auth.optavim.corp for Keycloak OIDC
+            - name: ca-bundle
+              mountPath: /etc/ssl/certs/ca-certificates.crt
+              subPath: ca-certificates.crt
+              readOnly: true
+          # The OrangeHRM init (Symfony + DB schema) takes 3-5 min.
+          # startupProbe holds off the livenessProbe during that time.
+          startupProbe:
+            tcpSocket:
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 60     # 10 min max
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 80
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pv-orangehrm-data
+        - name: ldap-ca
+          configMap:
+            name: orangehrm-ldap-ca
+        - name: ca-bundle
+          emptyDir: {}

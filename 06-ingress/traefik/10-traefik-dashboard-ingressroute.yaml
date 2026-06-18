@@ -1,0 +1,64 @@
+# ==============================================================================
+# Traefik Dashboard IngressRoute (namespace: ingress)
+# HTTPS access to the dashboard via dashboard.optavim.corp
+#
+# Protected by BasicAuth, to be hardened further in production
+# ==============================================================================
+
+---
+# BasicAuth Middleware for the dashboard
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: dashboard-auth
+  namespace: ingress
+  labels:
+    app: traefik
+    phase: "6"
+    project: optavim
+spec:
+  basicAuth:
+    secret: traefik-dashboard-auth
+
+---
+# Secret for BasicAuth
+# Generate with: htpasswd -nb admin MyPassword | base64
+# Example: admin:$apr1$xyz... base64 encoded
+apiVersion: v1
+kind: Secret
+metadata:
+  name: traefik-dashboard-auth
+  namespace: ingress
+  labels:
+    app: traefik
+    phase: "6"
+    project: optavim
+type: Opaque
+data:
+  # htpasswd -nb admin CHANGE_ME_password | base64
+  # Replace with the real generated value
+  users: <À_REMPLIR_BASE64_HTPASSWD>
+
+---
+# HTTPS IngressRoute for the dashboard
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: traefik-dashboard
+  namespace: ingress
+  labels:
+    app: traefik
+    phase: "6"
+    project: optavim
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`dashboard.optavim.corp`)
+      kind: Rule
+      middlewares:
+        - name: dashboard-auth
+      services:
+        - name: traefik-dashboard
+          port: 8080
+  tls: {}

@@ -1,0 +1,32 @@
+# gitleaks config for the OPTAVIM Kubernetes manifests.
+#
+# This repo is a homelab / portfolio: every credential in it is a CHANGE_ME
+# placeholder on purpose. The real lab passwords were scrubbed and rotated
+# before publication (see docs/SECURITY-posture.md).
+#
+# The allowlist below keeps CI green on those placeholders without turning off
+# secret detection: anything that isn't a CHANGE_ME placeholder (i.e. a real
+# leaked secret) still trips the gate.
+
+title = "OPTAVIM gitleaks config"
+
+# Keep gitleaks' built-in ruleset (AWS keys, GitHub tokens, generic
+# high-entropy secrets, etc.); only the placeholders are carved out below.
+[extend]
+useDefault = true
+
+# Allowlist applied to every rule.
+[allowlist]
+description = "Intentional CHANGE_ME placeholders (real secrets scrubbed + rotated; see docs/SECURITY-posture.md)"
+
+# Any CHANGE_ME / CHANGE_ME_* string is a placeholder for docs, not a secret.
+regexes = [
+  '''CHANGE_ME[_A-Za-z0-9]*''',
+]
+
+# Files that only show the shape of a secret (placeholder Secret manifests
+# and the keycloak truststore / LDAP-CA templates).
+paths = [
+  '''07-keycloak/00-namespace-secret\.yaml''',
+  '''07-keycloak/secrets-templates/.*''',
+]

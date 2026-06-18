@@ -1,0 +1,19 @@
+---
+# Override jvm.options to bump MaxDirectMemorySize: the OpenSearch security
+# plugin allocates ~291M direct memory when `openid_auth_domain` is configured
+# (in config.yml security), but the wazuh-indexer entrypoint hardcodes 256M.
+# jvm.options.d/*.options is read AFTER the main jvm.options, so a clean override.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-indexer-jvm-options
+  namespace: security
+  labels:
+    app: wazuh-indexer
+    project: optavim
+data:
+  00-optavim.options: |
+    # Bump direct memory so the OpenSearch security plugin can allocate
+    # its OIDC buffers (JWKS cache, HTTP client direct buffers).
+    # Without this: OutOfMemoryError "Cannot reserve 291650519 bytes of direct buffer memory"
+    -XX:MaxDirectMemorySize=512m

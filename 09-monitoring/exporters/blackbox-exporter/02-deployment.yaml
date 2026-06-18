@@ -1,0 +1,103 @@
+##############################################################################
+# OPTAVIM Blackbox exporter Deployment
+# Scraped by Prometheus in "exporter" mode (target in the query param).
+# Targets defined in the Prometheus scrape config.
+##############################################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app: blackbox-exporter
+    project: optavim
+    component: metrics
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: blackbox-exporter
+  template:
+    metadata:
+      labels:
+        app: blackbox-exporter
+        project: optavim
+      annotations:
+        ignore-check.kube-linter.io/drop-net-raw-capability: "NET_RAW required by the blackbox ICMP prober to send raw echo requests"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: blackbox-exporter
+          image: prom/blackbox-exporter:v0.25.0
+          args:
+            - --config.file=/etc/blackbox/blackbox.yml
+            - --web.listen-address=:9115
+          ports:
+            - name: probe
+              containerPort: 9115
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/blackbox
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: probe
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /-/healthy
+              port: probe
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            seccompProfile:
+              type: RuntimeDefault
+            # icmp prober requires CAP_NET_RAW
+            capabilities:
+              drop: ["ALL"]
+              # trivy:ignore:KSV-0119 NET_RAW required by the blackbox ICMP prober to send raw echo requests
+              add: ["NET_RAW"]
+      volumes:
+        - name: config
+          configMap:
+            name: blackbox-exporter
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app: blackbox-exporter
+    project: optavim
+    component: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: blackbox-exporter
+  ports:
+    - name: probe
+      port: 9115
+      targetPort: probe
+      protocol: TCP

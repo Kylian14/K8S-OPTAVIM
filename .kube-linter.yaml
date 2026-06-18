@@ -1,0 +1,29 @@
+# kube-linter config for the OPTAVIM manifests.
+#
+# The checks excluded below are exceptions we accept, each explained here and
+# in docs/SECURITY-posture.md. The workload in question needs them, and it
+# stays contained by namespace + NetworkPolicy (and PVCs where stateful).
+# Every other default check stays on and gates CI.
+checks:
+  exclude:
+    # Stateful LAMP and DB images write to their root filesystem and/or run as
+    # root by design: apache web root (Nextcloud/Dolibarr/OrangeHRM), Galera SST
+    # and recovery, OpenSearch config/logs, Keycloak data dir. Turning on
+    # readOnlyRootFilesystem or runAsNonRoot would break boot; the data sits on PVCs.
+    - "no-read-only-root-fs"
+    - "run-as-non-root"
+    # node-exporter reads node-level metrics, so it needs the host network/PID
+    # namespaces and read-only host root mounts.
+    - "host-network"
+    - "host-pid"
+    - "sensitive-host-mounts"
+    # blackbox-exporter needs NET_RAW to send ICMP echo (ping) probes.
+    - "drop-net-raw-capability"
+    # Wazuh indexer (OpenSearch) needs a privileged init container to set
+    # vm.max_map_count=262144. Its main container drops to uid 999 via setuid,
+    # so allowPrivilegeEscalation has to stay on for that drop to work.
+    - "privileged-container"
+    - "privilege-escalation-container"
+    # ttlSecondsAfterFinished is set on the CronJob jobTemplate (7200s); the
+    # pinned kube-linter version doesn't look inside CronJob.jobTemplate for it.
+    - "job-ttl-seconds-after-finished"

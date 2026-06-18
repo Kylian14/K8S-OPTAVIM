@@ -1,0 +1,118 @@
+##############################################################################
+# OPTAVIM: Connection CRDs (5 apps x 1 Connection)
+# Namespace: databases
+#
+# Each Connection CRD generates a Secret <app>-connection with a full DSN
+# (mysql://user:pwd@host:port/db?options) that the apps can consume
+# directly.
+#
+# Today the apps use their own Secret (nextcloud-secret, dolibarr-secret,
+# etc.) with the password in clear text. The Connection is created for
+# later: it will allow migrating the apps in V2 to a
+# valueFrom: secretKeyRef pointing at this generated Secret.
+#
+# At cutover (Phase 3), the Connections are created but not consumed by the
+# apps, which keep using their namespace-local Secrets.
+##############################################################################
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Connection
+metadata:
+  name: keycloak-connection
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  username: keycloak
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: keycloak
+  database: keycloak_db
+  secretName: keycloak-connection
+  secretTemplate:
+    key: dsn
+    format: "mysql://{{ .User }}:{{ .Password }}@{{ .Host }}:{{ .Port }}/{{ .Database }}"
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Connection
+metadata:
+  name: nextcloud-connection
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  username: nextcloud
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: nextcloud
+  database: nextcloud_db
+  secretName: nextcloud-connection
+  secretTemplate:
+    key: dsn
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Connection
+metadata:
+  name: dolibarr-connection
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  username: dolibarr
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: dolibarr
+  database: dolibarr_db
+  secretName: dolibarr-connection
+  secretTemplate:
+    key: dsn
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Connection
+metadata:
+  name: orangehrm-connection
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  username: orangehrm
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: orangehrm
+  database: orangehrm_db
+  secretName: orangehrm-connection
+  secretTemplate:
+    key: dsn
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Connection
+metadata:
+  name: privacyidea-connection
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  username: privacyidea
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: privacyidea
+  database: privacyidea_db
+  secretName: privacyidea-connection
+  secretTemplate:
+    key: dsn
+    format: "mysql+pymysql://{{ .User }}:{{ .Password }}@{{ .Host }}:{{ .Port }}/{{ .Database }}"

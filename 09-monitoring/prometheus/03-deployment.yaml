@@ -1,0 +1,137 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+    project: optavim
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+    project: optavim
+    phase: "7"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+        project: optavim
+      annotations:
+        # chown-data initContainer must run as root (uid 0) to fix NFS PVC
+        # ownership: NFS does not honour fsGroup. Kept to a single init step.
+        ignore-check.kube-linter.io/run-as-non-root: "chown-data init step needs root to chown NFS PVC; main container runs as nobody (65534)"
+    spec:
+      serviceAccountName: prometheus
+      automountServiceAccountToken: true
+      # Warning: 1-replica deployment (state on RWO PVC)
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65534
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      # Chown the NFS PVC before Prometheus starts (NFS does not apply fsGroup)
+      initContainers:
+        - name: chown-data
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 65534:65534 /prometheus && chmod 775 /prometheus"]
+          securityContext:
+            # trivy:ignore:KSV-0014 chown-data init step requires root to fix NFS PVC ownership (NFS ignores fsGroup); writes only to the PVC mount
+            # trivy:ignore:KSV-0020 runs as root (uid 0) by design for the chown; not the long-lived process
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              # CHOWN required to chown the NFS-backed PVC for the nobody user
+              add: ["CHOWN"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits:   {cpu: "100m", memory: "64Mi"}
+          volumeMounts:
+            - name: data
+              mountPath: /prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.53.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            # Retention bumped to 30d for the Executive dashboards (now-30d).
+            # PV 5Gi is enough (~200 MB/day observed).
+            - --storage.tsdb.retention.time=30d
+            - --web.console.libraries=/usr/share/prometheus/console_libraries
+            - --web.console.templates=/usr/share/prometheus/consoles
+            - --web.enable-lifecycle
+          ports:
+            - name: http
+              containerPort: 9090
+          resources:
+            requests:
+              cpu: "300m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: data
+              mountPath: /prometheus
+            # readOnlyRootFilesystem: true -> writable /tmp required by Prometheus
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: 9090
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: pvc-prometheus
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

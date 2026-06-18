@@ -1,0 +1,174 @@
+##############################################################################
+# OPTAVIM: MinIO standalone (S3-compatible backup target)
+# Namespace: mariadb-backup (dedicated, to escape the databases ns ResourceQuota)
+#
+# Serves as the S3 backend for:
+#   - the bootstrap dump -> bucket mariadb-backups/backup.<ts>.sql
+#   - the scheduled Backup CRD -> daily mariabackup -> same bucket
+#
+# Storage: 1 PVC NFS RWO 10Gi (subdir-provisioner creates /data/exports/minio-XXX)
+# No HA, standalone is enough for the homelab. In prod: MinIO distributed 4 nodes.
+#
+# MinIO lives outside the databases ns for 3 reasons:
+#   1. `databases` quota saturated (requests.cpu + memory + PVC at 100%)
+#   2. Isolation: a compromised MinIO does not grant access to the databases
+#   3. Distinct lifecycle: MinIO survives a drop of the databases ns
+##############################################################################
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mariadb-backup
+  labels:
+    project: optavim
+    purpose: backup-target
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: minio-creds
+  namespace: mariadb-backup
+  labels:
+    app: minio
+    project: optavim
+type: Opaque
+stringData:
+  # Warning: values to fill in before apply (placeholders).
+  accessKey: "CHANGE_ME_minio_access_key"
+  secretKey: "CHANGE_ME_minio_secret_key"
+  # Variables consumed by the MinIO container
+  MINIO_ROOT_USER: "CHANGE_ME_minio_access_key"
+  MINIO_ROOT_PASSWORD: "CHANGE_ME_minio_secret_key"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: mariadb-backup
+  labels:
+    app: minio
+    project: optavim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: mariadb-backup
+  labels:
+    app: minio
+    project: optavim
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate           # PVC RWO single-attached
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+        project: optavim
+      annotations:
+        # Prometheus scrape: MinIO exposes /minio/v2/metrics/cluster publicly
+        # when MINIO_PROMETHEUS_AUTH_TYPE=public
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9000"
+        prometheus.io/path: "/minio/v2/metrics/cluster"
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # uid/gid stay at 1000 (the image's non-root minio user) so it owns the
+        # /data PVC; a >10000 id wouldn't match. Image comes from the official
+        # MinIO registry, pinned to an immutable RELEASE.* tag.
+        - name: minio
+          image: quay.io/minio/minio:RELEASE.2025-04-08T15-41-24Z
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          # readOnlyRootFilesystem + runAsNonRoot removed: they made minio crashloop
+          # (observed in test). The image already runs as non-root (uid 1000).
+          securityContext:
+            allowPrivilegeEscalation: false
+          envFrom:
+            - secretRef:
+                name: minio-creds
+          env:
+            # Disables JWT auth on the /minio/v2/metrics/* endpoints
+            # so Prometheus can scrape without a Bearer token.
+            # In public prod we would generate a JWT and use it via the
+            # Prometheus job, but on the homelab LAN `public` is enough.
+            - name: MINIO_PROMETHEUS_AUTH_TYPE
+              value: "public"
+          ports:
+            - name: s3
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            # readOnlyRootFilesystem -> /tmp must stay writable for minio
+            - name: minio-tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+            timeoutSeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            timeoutSeconds: 5
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: minio-data
+        - name: minio-tmp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: mariadb-backup
+  labels:
+    app: minio
+    project: optavim
+spec:
+  type: ClusterIP
+  selector:
+    app: minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001

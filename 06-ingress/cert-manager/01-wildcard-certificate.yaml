@@ -1,0 +1,27 @@
+# Wildcard certificate *.optavim.corp requested from cert-manager, signed by AD CS
+# via adcs-issuer. Stored in the secret `optavim-wildcard-tls` consumed by
+# Traefik for all HTTPS IngressRoutes.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: optavim-wildcard
+  namespace: ingress
+  labels:
+    app: traefik
+    project: optavim
+    phase: "5"
+spec:
+  secretName: optavim-wildcard-tls
+  commonName: "*.optavim.corp"
+  dnsNames:
+    - "*.optavim.corp"
+    - "optavim.corp"
+  duration: 8760h   # 1 year
+  renewBefore: 720h # renew 30 days before expiry
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    group: adcs.certmanager.csf.nokia.com
+    kind: ClusterAdcsIssuer
+    name: adcs-optavim

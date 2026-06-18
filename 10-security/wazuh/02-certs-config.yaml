@@ -1,0 +1,26 @@
+# Config for wazuh-certs-generator: list of the stack nodes and their FQDNs.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wazuh-certs-config
+  namespace: security
+  labels:
+    app: wazuh
+    project: optavim
+data:
+  certs.yml: |
+    nodes:
+      # Indexer (OpenSearch): single node
+      indexer:
+        - name: wazuh-indexer
+          ip: wazuh-indexer.security.svc.cluster.local
+
+      # Server (Wazuh Manager)
+      server:
+        - name: wazuh-manager
+          ip: wazuh-manager.security.svc.cluster.local
+
+      # Dashboard (OpenSearch Dashboards)
+      dashboard:
+        - name: wazuh-dashboard
+          ip: wazuh-dashboard.security.svc.cluster.local

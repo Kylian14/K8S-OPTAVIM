@@ -1,0 +1,86 @@
+##############################################################################
+# OPTAVIM: Database CRDs (5 logical databases)
+# Namespace: databases
+#
+# The operator creates the schemas if absent. After the bootstrap dump, the schemas
+# already exist (the SQL restore contains CREATE DATABASE), so these CRDs then
+# adopt the existing databases.
+#
+# Naming convention: <app>_db. Same name as on the Galera side, so the apps
+# do not have to change their DB_NAME.
+##############################################################################
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Database
+metadata:
+  name: keycloak-db
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  name: keycloak_db
+  characterSet: utf8mb4
+  collate: utf8mb4_unicode_ci
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Database
+metadata:
+  name: nextcloud-db
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  name: nextcloud_db
+  characterSet: utf8mb4
+  collate: utf8mb4_unicode_ci
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Database
+metadata:
+  name: dolibarr-db
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  name: dolibarr_db
+  characterSet: utf8mb4
+  collate: utf8mb4_unicode_ci
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Database
+metadata:
+  name: orangehrm-db
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  name: orangehrm_db
+  characterSet: utf8mb4
+  collate: utf8mb4_unicode_ci
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Database
+metadata:
+  name: privacyidea-db
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  name: privacyidea_db
+  characterSet: utf8mb4
+  collate: utf8mb4_unicode_ci

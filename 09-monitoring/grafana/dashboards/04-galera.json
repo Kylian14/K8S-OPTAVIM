@@ -1,0 +1,83 @@
+{
+  "uid": "opta-db-galera",
+  "title": "OPTAVIM — Base de données",
+  "tags": ["optavim", "db"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-3h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0}
+  ]},
+  "links": [{"title": "Executive", "url": "/d/opta-exec", "type": "link", "icon": "external link"}],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Serveurs base de données",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "mysql_global_status_wsrep_cluster_size", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#F59E0B", "value": 2}, {"color": "#22D3EE", "value": 3}]}, "unit": "short"}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "État du cluster",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "mysql_global_status_wsrep_cluster_status", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#22D3EE"}, "mappings": [{"options": {"4": {"text": "Primary", "color": "green"}}, "type": "value"}]}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Connexions actives",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "mysql_global_status_threads_connected", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#3B82F6"}, "unit": "short"}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Requêtes lentes",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "rate(mysql_global_status_slow_queries[5m])", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#22D3EE", "value": null}, {"color": "#F59E0B", "value": 1}, {"color": "#EF4444", "value": 10}]}, "unit": "qps"}}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Requêtes par seconde",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "rate(mysql_global_status_questions[5m])", "refId": "A", "legendFormat": "qps"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "qps"}}
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Sessions actives",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {"expr": "mysql_global_status_threads_running", "refId": "A", "legendFormat": "running"},
+        {"expr": "mysql_global_status_threads_connected", "refId": "B", "legendFormat": "connected"}
+      ],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}}
+    },
+    {
+      "id": 20, "type": "timeseries", "title": "File de réplication",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {"expr": "mysql_global_status_wsrep_local_recv_queue", "refId": "A", "legendFormat": "recv queue"},
+        {"expr": "mysql_global_status_wsrep_local_send_queue", "refId": "B", "legendFormat": "send queue"}
+      ],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}}
+    },
+    {
+      "id": 21, "type": "timeseries", "title": "Efficacité du cache",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 13},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "100 * (1 - rate(mysql_global_status_innodb_buffer_pool_reads[5m]) / rate(mysql_global_status_innodb_buffer_pool_read_requests[5m]))", "refId": "A", "legendFormat": "hit ratio"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "percent", "min": 0, "max": 100}}
+    }
+  ]
+}

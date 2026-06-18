@@ -1,0 +1,209 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-indexer
+  namespace: security
+  labels:
+    app: wazuh-indexer
+    project: optavim
+spec:
+  selector:
+    app: wazuh-indexer
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+    - name: transport
+      port: 9300
+      targetPort: 9300
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-indexer
+  namespace: security
+  labels:
+    app: wazuh-indexer
+    project: optavim
+    phase: "7"
+spec:
+  replicas: 1
+  serviceName: wazuh-indexer
+  selector:
+    matchLabels:
+      app: wazuh-indexer
+  template:
+    metadata:
+      labels:
+        app: wazuh-indexer
+        project: optavim
+      annotations:
+        # The sysctl-vm-max-map-count is intentionally privileged + runAsUser 0:
+        # OpenSearch refuses to start without vm.max_map_count=262144, a kernel
+        # setting not available via securityContext.sysctls (unsafe sysctl not
+        # whitelisted). Isolated in an ephemeral initContainer that writes no
+        # data and terminates before the main container.
+        ignore-check.kube-linter.io/privileged-container: "OpenSearch requires vm.max_map_count via a privileged initContainer (kernel sysctl)"
+        ignore-check.kube-linter.io/run-as-non-root: "sysctl/chown initContainers need root; the main container runs as runAsNonRoot 1000"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      # vm.max_map_count required by OpenSearch (init in hostNet / privileged)
+      initContainers:
+        # trivy:ignore:KSV-0017 OpenSearch requires vm.max_map_count=262144; kernel sysctl not settable without privileged, isolated in an ephemeral init that writes no data
+        - name: sysctl-vm-max-map-count
+          image: busybox:1.36
+          command: ["sh", "-c", "sysctl -w vm.max_map_count=262144"]
+          securityContext:
+            # trivy:ignore:KSV-0017 privileged initContainer dedicated to the sysctl above
+            privileged: true
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+            seccompProfile:
+              type: RuntimeDefault
+          resources: {requests: {cpu: "10m", memory: "16Mi"}, limits: {cpu: "50m", memory: "32Mi"}}
+        - name: chown-data
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 1000:1000 /var/lib/wazuh-indexer"]
+          securityContext:
+            # chown the PVC to uid 1000 (wazuh): needs root, but not privileged.
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources: {requests: {cpu: "10m", memory: "16Mi"}, limits: {cpu: "50m", memory: "32Mi"}}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/wazuh-indexer
+      containers:
+        - name: wazuh-indexer
+          image: wazuh/wazuh-indexer:4.8.2
+          # trivy:ignore:KSV-0014 OpenSearch rewrites its config/logs under /usr/share/wazuh-indexer (jvm.options.d, logs, keystore) at boot; readOnlyRootFilesystem would break startup. Persistent data isolated on PVC, dedicated namespace + NetworkPolicy.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: OPENSEARCH_JAVA_OPTS
+              value: "-Xms1g -Xmx1g"
+            - name: DISABLE_INSTALL_DEMO_CONFIG
+              value: "true"
+            # Single-node cluster (no multi-node discovery)
+            - name: discovery.type
+              value: "single-node"
+            - name: network.host
+              value: "0.0.0.0"
+            - name: node.name
+              value: "wazuh-indexer"
+            - name: cluster.name
+              value: "wazuh-cluster"
+            - name: bootstrap.memory_lock
+              value: "false"
+            # Required by the readinessProbe for curl auth
+            - name: INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-secret
+                  key: INDEXER_PASSWORD
+          # Note: the security index init (securityadmin.sh) must be run
+          # manually once the pod is healthy (see 10-security/wazuh/README.md).
+          ports:
+            - name: http
+              containerPort: 9200
+            - name: transport
+              containerPort: 9300
+          resources:
+            requests:
+              cpu: "300m"
+              memory: "1536Mi"
+            limits:
+              cpu: "500m"
+              memory: "2Gi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/wazuh-indexer
+            # Overwrites the demo certs bundled in the image (indexer.pem /
+            # indexer-key.pem / root-ca.pem) with our generated certs.
+            # The default opensearch.yml references these three names.
+            - name: certs
+              mountPath: /usr/share/wazuh-indexer/certs/indexer.pem
+              subPath: wazuh-indexer.pem
+              readOnly: true
+            - name: certs
+              mountPath: /usr/share/wazuh-indexer/certs/indexer-key.pem
+              subPath: wazuh-indexer-key.pem
+              readOnly: true
+            - name: certs
+              mountPath: /usr/share/wazuh-indexer/certs/root-ca.pem
+              subPath: root-ca.pem
+              readOnly: true
+            - name: certs-admin
+              mountPath: /usr/share/wazuh-indexer/certs/admin.pem
+              subPath: admin.pem
+              readOnly: true
+            - name: certs-admin
+              mountPath: /usr/share/wazuh-indexer/certs/admin-key.pem
+              subPath: admin-key.pem
+              readOnly: true
+            # Override jvm.options: bump MaxDirectMemorySize for OIDC
+            # (the security plugin allocates ~291M direct memory, 256M default is not enough).
+            - name: jvm-options
+              mountPath: /usr/share/wazuh-indexer/config/jvm.options.d/00-optavim.options
+              subPath: 00-optavim.options
+              readOnly: true
+            # OPTAVIM AD root CA: required by the OpenID security plugin to
+            # validate the TLS cert of auth.optavim.corp (Keycloak signed by AD).
+            # Referenced by securityconfig.yml `pemtrustedcas_filepath`.
+            - name: optavim-ca
+              mountPath: /usr/share/wazuh-indexer/certs/optavim-ca.pem
+              subPath: optavim-ca.pem
+              readOnly: true
+          startupProbe:
+            tcpSocket:
+              port: 9200
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 30     # 5 min for OpenSearch init + securityadmin
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - curl -k --silent --fail -u "admin:$INDEXER_PASSWORD" https://localhost:9200/_cluster/health | grep -qE '"status":"(green|yellow)"'
+            periodSeconds: 20
+            timeoutSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pvc-wazuh-indexer
+        - name: certs
+          secret:
+            secretName: wazuh-certs-indexer
+            defaultMode: 0400
+        - name: certs-admin
+          secret:
+            secretName: wazuh-certs-admin
+            defaultMode: 0400
+        - name: jvm-options
+          configMap:
+            name: wazuh-indexer-jvm-options
+            defaultMode: 0444
+        - name: optavim-ca
+          secret:
+            secretName: wazuh-indexer-optavim-ca
+            defaultMode: 0444

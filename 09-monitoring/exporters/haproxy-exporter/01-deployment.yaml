@@ -1,0 +1,107 @@
+##############################################################################
+# OPTAVIM HAProxy exporter
+# Scrapes external HAProxy at 10.1.50.100:8404/stats;csv
+#
+# Prerequisite: external HAProxy must expose CSV stats on :8404
+#   frontend stats
+#     bind 0.0.0.0:8404
+#     stats enable
+#     stats uri /stats
+#     stats refresh 10s
+#
+# If not in place, the metric haproxy_up={instance="10.1.50.100"} = 0 in
+# Prometheus, triggers alert "HAProxy externe metrics endpoint absent".
+##############################################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haproxy-exporter
+  namespace: monitoring
+  labels:
+    app: haproxy-exporter
+    project: optavim
+    component: metrics
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: haproxy-exporter
+  template:
+    metadata:
+      labels:
+        app: haproxy-exporter
+        project: optavim
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9101"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: haproxy-exporter
+          image: prom/haproxy-exporter:v0.15.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          args:
+            - --haproxy.scrape-uri=http://10.1.50.100:8404/stats;csv
+            - --web.listen-address=:9101
+          ports:
+            - name: metrics
+              containerPort: 9101
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haproxy-exporter
+  namespace: monitoring
+  labels:
+    app: haproxy-exporter
+    project: optavim
+    component: metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9101"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: haproxy-exporter
+  ports:
+    - name: metrics
+      port: 9101
+      targetPort: metrics
+      protocol: TCP

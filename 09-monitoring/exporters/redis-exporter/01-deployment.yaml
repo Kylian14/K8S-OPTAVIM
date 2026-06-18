@@ -1,0 +1,102 @@
+##############################################################################
+# OPTAVIM Redis exporter (oliver006/redis_exporter)
+# Namespace: databases (close to the Redis target)
+# Scraped by Prometheus via pod-level annotation (port 9121, path /metrics).
+##############################################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-exporter
+  namespace: databases
+  labels:
+    app: redis-exporter
+    project: optavim
+    component: metrics
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: redis-exporter
+  template:
+    metadata:
+      labels:
+        app: redis-exporter
+        project: optavim
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 59000
+        runAsGroup: 59000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: redis-exporter
+          image: oliver006/redis_exporter:v1.62.0-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          args:
+            - --redis.addr=redis://redis.databases.svc.cluster.local:6379
+            # If Redis has a password: --redis.password-file=/etc/redis-secret/password
+            # Today OPTAVIM Redis = no auth (ClusterIP intra-cluster only)
+            - --web.listen-address=:9121
+            - --web.telemetry-path=/metrics
+            - --include-system-metrics
+          ports:
+            - name: metrics
+              containerPort: 9121
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  namespace: databases
+  labels:
+    app: redis-exporter
+    project: optavim
+    component: metrics
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9121"
+    prometheus.io/path: "/metrics"
+spec:
+  type: ClusterIP
+  selector:
+    app: redis-exporter
+  ports:
+    - name: metrics
+      port: 9121
+      targetPort: metrics
+      protocol: TCP

@@ -1,0 +1,11 @@
+# Namespace 'identity': privacyIDEA (TOTP MFA for remote-work OpenVPN)
+# The 'privacyidea-secret' Secret was created out of repo (manual kubectl create secret),
+# passwords generated and stored in the admin password manager.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: identity
+  labels:
+    name: identity
+    project: optavim
+    phase: "9"

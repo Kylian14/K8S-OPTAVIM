@@ -1,0 +1,138 @@
+---
+# ServiceAccount + permissions so the Job can create the cert Secrets
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wazuh-certs-generator
+  namespace: security
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wazuh-certs-generator
+  namespace: security
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "list", "patch", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wazuh-certs-generator
+  namespace: security
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wazuh-certs-generator
+subjects:
+  - kind: ServiceAccount
+    name: wazuh-certs-generator
+    namespace: security
+---
+# One-shot Job: generates the certs and pushes them as Secrets.
+# Re-run if you change the config:
+#   kubectl delete job wazuh-certs-generator -n security && kubectl apply -f 03-certs-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wazuh-certs-generator
+  namespace: security
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      annotations:
+        # Third-party images (openssl / kubectl) whose runtime uid is not guaranteed
+        # non-root: we do not force runAsNonRoot so the Job does not break, but
+        # we apply safe hardening (drop ALL caps, no-priv-esc, seccomp).
+        ignore-check.kube-linter.io/run-as-non-root: "certs-generator/alpine-k8s images: runtime uid not confirmed non-root; safe hardening applied (caps/seccomp)"
+    spec:
+      # Pod-level securityContext (KSV-0118): RuntimeDefault seccomp baseline.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: wazuh-certs-generator
+      restartPolicy: Never
+      initContainers:
+        - name: generator
+          image: wazuh/wazuh-certs-generator:0.0.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits:   {cpu: "200m", memory: "128Mi"}
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: output
+              mountPath: /certificates
+      containers:
+        - name: upload
+          image: alpine/k8s:1.30.0
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits:   {cpu: "200m", memory: "128Mi"}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              cd /certificates
+              echo "=== Generated files ==="
+              ls -la
+              echo
+              # Admin key + cert (for OpenSearch admin / internal_users)
+              kubectl create secret generic wazuh-certs-admin -n security \
+                --dry-run=client -o yaml \
+                --from-file=admin.pem=./admin.pem \
+                --from-file=admin-key.pem=./admin-key.pem \
+                --from-file=root-ca.pem=./root-ca.pem \
+                | kubectl apply -f -
+
+              # Indexer
+              kubectl create secret generic wazuh-certs-indexer -n security \
+                --dry-run=client -o yaml \
+                --from-file=wazuh-indexer.pem=./wazuh-indexer.pem \
+                --from-file=wazuh-indexer-key.pem=./wazuh-indexer-key.pem \
+                --from-file=root-ca.pem=./root-ca.pem \
+                | kubectl apply -f -
+
+              # Manager
+              kubectl create secret generic wazuh-certs-manager -n security \
+                --dry-run=client -o yaml \
+                --from-file=wazuh-manager.pem=./wazuh-manager.pem \
+                --from-file=wazuh-manager-key.pem=./wazuh-manager-key.pem \
+                --from-file=root-ca.pem=./root-ca.pem \
+                | kubectl apply -f -
+
+              # Dashboard
+              kubectl create secret generic wazuh-certs-dashboard -n security \
+                --dry-run=client -o yaml \
+                --from-file=wazuh-dashboard.pem=./wazuh-dashboard.pem \
+                --from-file=wazuh-dashboard-key.pem=./wazuh-dashboard-key.pem \
+                --from-file=root-ca.pem=./root-ca.pem \
+                | kubectl apply -f -
+
+              echo "=== 4 Secrets created ==="
+              kubectl get secrets -n security -l app=wazuh-certs 2>/dev/null || kubectl get secrets -n security | grep wazuh-certs
+          volumeMounts:
+            - name: output
+              mountPath: /certificates
+      volumes:
+        - name: config
+          configMap:
+            name: wazuh-certs-config
+        - name: output
+          emptyDir: {}

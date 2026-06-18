@@ -1,0 +1,86 @@
+# Security scanning for the OPTAVIM Kubernetes manifests.
+#
+# Four independent gates run on every push and pull request. Each gate is a
+# separate step so a failure points to a single scanner. The rationale for the
+# accepted exceptions baked into the ignore files (.gitleaks.toml, .trivyignore,
+# .kube-linter.yaml) is documented in docs/SECURITY-posture.md.
+#
+#   gitleaks     — no real secret ever lands in git history
+#   trivy config — Kubernetes misconfiguration scan (CRITICAL/HIGH)
+#   kube-linter  — workload hardening lint
+#   kubeconform  — manifests validate against the upstream OpenAPI schemas
+name: Security
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Manifest security scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # gitleaks needs the full history to scan past commits, not just HEAD.
+          fetch-depth: 0
+
+      # 1) Secret scanning. Whitelists for CHANGE_ME placeholders live in
+      #    .gitleaks.toml so this gate stays green while still catching any
+      #    accidental real credential.
+      - name: gitleaks (secret scan)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          # Skip the upstream license nag — this is a public portfolio repo.
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
+      # 2) Kubernetes misconfiguration scan via the pinned trivy CLI, failing on
+      #    CRITICAL/HIGH. Accepted exceptions live in the root .trivyignore
+      #    (justified there and in docs/SECURITY-posture.md).
+      - name: Install trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin v0.71.1
+          trivy --version
+      - name: trivy config scan
+        run: trivy config --severity CRITICAL,HIGH --ignorefile .trivyignore --exit-code 1 .
+
+      # 3) Workload hardening lint. Per-object `ignore-check.kube-linter.io/...`
+      #    annotations and the optional repo-level .kube-linter.yaml are honored.
+      - name: kube-linter lint
+        uses: stackrox/kube-linter-action@v1.0.5
+        with:
+          directory: .
+          config: .kube-linter.yaml
+
+      # 4) Kustomize build + schema validation. Each numbered phase directory is
+      #    a Kustomize overlay; we render it with `kustomize build` and validate
+      #    the rendered output against the upstream Kubernetes OpenAPI specs.
+      #    Custom Resources / CRDs with no published schema are skipped
+      #    (-ignore-missing-schemas), so the gate fails only on a broken build
+      #    or a genuinely invalid core resource.
+      - name: Install kustomize + kubeconform
+        run: |
+          curl -sSL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo install ./kustomize /usr/local/bin/kustomize
+          KUBECONFORM_VERSION="v0.6.7"
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          tar -xzf /tmp/kubeconform.tar.gz -C /tmp kubeconform
+          sudo install /tmp/kubeconform /usr/local/bin/kubeconform
+          kustomize version && kubeconform -v
+
+      - name: kustomize build + validate every phase
+        run: |
+          set -euo pipefail
+          for d in $(find . -maxdepth 2 -name kustomization.yaml -exec dirname {} \; | sort -u); do
+            echo "::group::kustomize build $d"
+            kustomize build "$d" | kubeconform -ignore-missing-schemas -summary -strict
+            echo "::endgroup::"
+          done

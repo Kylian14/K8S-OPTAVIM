@@ -1,0 +1,231 @@
+---
+##############################################################################
+# OPTAVIM Grafana branding ConfigMap
+#
+# Holds the 3 branding assets used by the `branding-overlay` initContainer
+# (see 03-deployment.yaml) to customize Grafana:
+#   - optavim-icon.svg  -> /usr/share/grafana/public/img/grafana_icon.svg
+#   - optavim-logo.svg  -> /usr/share/grafana/public/img/grafana_typelogo.svg
+#   - optavim.css       -> /usr/share/grafana/public/css/optavim.css + <link>
+#                         injected into index.html
+#
+# To iterate:
+#   1. Edit the source files in 09-monitoring/grafana/branding/
+#   2. Regenerate this ConfigMap: ./09-monitoring/grafana/branding/sync.sh
+#      (or copy manually)
+#   3. kubectl apply -f 04-branding-cm.yaml
+#   4. kubectl rollout restart deploy/grafana -n monitoring
+##############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-branding
+  namespace: monitoring
+  labels:
+    app: grafana
+    project: optavim
+    component: branding
+data:
+  optavim-icon.svg: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 400 400">
+      <defs>
+        <linearGradient id="vision" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#3B82F6"/>
+          <stop offset="1" stop-color="#22D3EE"/>
+        </linearGradient>
+        <mask id="aperture">
+          <path d="M384,200 L292,40.64 L108,40.64 L16,200 L108,359.36 L292,359.36 Z" fill="#fff"/>
+          <path d="M255.44,168 L200,136 L144.56,168 L144.56,232 L200,264 L255.44,232 Z" fill="#000"/>
+          <g stroke="#000" stroke-width="9.6" stroke-linecap="round">
+            <line x1="255.44" y1="168" x2="384" y2="200"/>
+            <line x1="200" y1="136" x2="292" y2="40.64"/>
+            <line x1="144.56" y1="168" x2="108" y2="40.64"/>
+            <line x1="144.56" y1="232" x2="16" y2="200"/>
+            <line x1="200" y1="264" x2="108" y2="359.36"/>
+            <line x1="255.44" y1="232" x2="292" y2="359.36"/>
+          </g>
+        </mask>
+      </defs>
+      <rect x="0" y="0" width="400" height="400" fill="url(#vision)" mask="url(#aperture)"/>
+    </svg>
+
+  optavim-logo.svg: |
+    <?xml version="1.0" encoding="UTF-8"?>
+    <svg xmlns="http://www.w3.org/2000/svg" width="240" height="40" viewBox="0 0 240 40">
+      <defs>
+        <linearGradient id="vision-h" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#3B82F6"/>
+          <stop offset="1" stop-color="#22D3EE"/>
+        </linearGradient>
+        <mask id="aperture-h">
+          <path d="M36,18 L27.36,3.66 L10.64,3.66 L2,18 L10.64,32.34 L27.36,32.34 Z" fill="#fff"/>
+          <path d="M24.49,15.12 L20,12.24 L15.51,15.12 L15.51,20.88 L20,23.76 L24.49,20.88 Z" fill="#000"/>
+          <g stroke="#000" stroke-width="0.96" stroke-linecap="round">
+            <line x1="24.49" y1="15.12" x2="36" y2="18"/>
+            <line x1="20" y1="12.24" x2="27.36" y2="3.66"/>
+            <line x1="15.51" y1="15.12" x2="10.64" y2="3.66"/>
+            <line x1="15.51" y1="20.88" x2="2" y2="18"/>
+            <line x1="20" y1="23.76" x2="10.64" y2="32.34"/>
+            <line x1="24.49" y1="20.88" x2="27.36" y2="32.34"/>
+          </g>
+        </mask>
+      </defs>
+      <rect x="0" y="0" width="40" height="40" fill="url(#vision-h)" mask="url(#aperture-h)"/>
+      <text x="50" y="27"
+            font-family="'Space Grotesk', 'Manrope', system-ui, sans-serif"
+            font-size="22"
+            font-weight="700"
+            fill="#FFFFFF"
+            letter-spacing="-0.5">OPTAVIM</text>
+    </svg>
+
+  optavim.css: |
+    /* OPTAVIM Grafana Aurora theme, see 09-monitoring/grafana/branding/optavim.css */
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+    :root {
+      --opta-navy-950: #070B16;
+      --opta-navy-900: #0B1120;
+      --opta-navy-850: #0F1729;
+      --opta-navy-800: #1E293B;
+      --opta-blue-500: #3B82F6;
+      --opta-cyan-400: #22D3EE;
+      --opta-iris-500: #6366F1;
+      --opta-text-strong: #F8FAFC;
+      --opta-text-muted: rgba(226, 232, 240, 0.7);
+      --opta-border: rgba(255, 255, 255, 0.08);
+      --opta-grad-vision: linear-gradient(135deg, #3B82F6 0%, #22D3EE 100%);
+    }
+
+    .theme-dark {
+      --primary-color: var(--opta-blue-500);
+      --secondary-color: var(--opta-cyan-400);
+      --brand-color: var(--opta-blue-500);
+    }
+
+    body, .theme-dark {
+      font-family: 'Manrope', system-ui, -apple-system, sans-serif !important;
+      background: var(--opta-navy-900) !important;
+      color: var(--opta-text-strong);
+    }
+
+    h1, h2, h3, h4, h5, h6,
+    [class*="page-header"],
+    [class*="dashboard-title"] {
+      font-family: 'Space Grotesk', 'Manrope', sans-serif !important;
+      font-weight: 600 !important;
+      letter-spacing: -0.01em;
+    }
+
+    code, pre, kbd,
+    [class*="metric-value"],
+    [class*="stat-panel-value"] {
+      font-family: 'JetBrains Mono', 'SFMono-Regular', monospace !important;
+    }
+
+    nav[aria-label="Main menu"],
+    .sidemenu,
+    .scrollbar-view > nav {
+      background: var(--opta-navy-950) !important;
+      border-right: 1px solid var(--opta-border) !important;
+    }
+
+    .main-view,
+    [class*="page-container"],
+    [class*="dashboard-container"] {
+      background: var(--opta-navy-900) !important;
+    }
+
+    .panel-container,
+    [class*="panel-content"] {
+      background: var(--opta-navy-850) !important;
+      border: 1px solid var(--opta-border) !important;
+      border-radius: 10px !important;
+    }
+
+    .panel-title,
+    [class*="panel-title"] {
+      font-family: 'Space Grotesk', sans-serif !important;
+      font-weight: 600 !important;
+      color: var(--opta-text-strong) !important;
+    }
+
+    button[class*="primary"],
+    .btn-primary,
+    [data-testid*="primary"] {
+      background: var(--opta-grad-vision) !important;
+      border: none !important;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25) !important;
+      font-family: 'Manrope', sans-serif !important;
+      font-weight: 600 !important;
+    }
+
+    button[class*="primary"]:hover,
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(59, 130, 246, 0.35) !important;
+    }
+
+    [class*="login-content"],
+    .login-content,
+    .login-form-input {
+      background: var(--opta-navy-850) !important;
+    }
+
+    .login-content::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(90% 80% at 18% 12%, rgba(29, 78, 216, 0.6) 0%, transparent 55%),
+        radial-gradient(80% 70% at 88% 22%, rgba(6, 182, 212, 0.5) 0%, transparent 50%),
+        radial-gradient(70% 70% at 60% 100%, rgba(49, 46, 129, 0.5) 0%, transparent 60%),
+        linear-gradient(160deg, #0B1120, #070B16);
+      z-index: -1;
+    }
+
+    .login-content::after {
+      content: "OPTIMISATION  \00b7  VISION  \00b7  AMBITION";
+      position: fixed;
+      bottom: 32px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.3em;
+      color: rgba(148, 163, 184, 0.55);
+      z-index: 100;
+      pointer-events: none;
+    }
+
+    input[type="text"],
+    input[type="password"],
+    input[type="email"],
+    input[type="search"],
+    textarea,
+    select,
+    [class*="input-wrapper"] input {
+      background: var(--opta-navy-900) !important;
+      border: 1px solid var(--opta-border) !important;
+      border-radius: 8px !important;
+      color: var(--opta-text-strong) !important;
+      font-family: 'Manrope', sans-serif !important;
+    }
+
+    input:focus, textarea:focus, select:focus {
+      border-color: var(--opta-blue-500) !important;
+      box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+      outline: none !important;
+    }
+
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: var(--opta-navy-950); }
+    ::-webkit-scrollbar-thumb { background: var(--opta-navy-800); border-radius: 5px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--opta-blue-500); }
+
+    .footer-item-news,
+    [class*="footer"] [class*="news"] {
+      display: none !important;
+    }

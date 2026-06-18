@@ -1,0 +1,44 @@
+# Traefik IngressRoute for the mfa.optavim.corp self-service portal
+# DNS: mfa.optavim.corp → 10.1.50.100 (HAProxy VIP) → worker NodePort 30443 → Traefik
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: privacyidea-https
+  namespace: identity
+  labels:
+    app: privacyidea-server
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`mfa.optavim.corp`)
+      kind: Rule
+      services:
+        - name: privacyidea-web
+          namespace: identity
+          port: 8080
+  tls:
+    secretName: optavim-wildcard-tls
+---
+# HTTP → HTTPS redirect
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: privacyidea-http
+  namespace: identity
+  labels:
+    app: privacyidea-server
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`mfa.optavim.corp`)
+      kind: Rule
+      middlewares:
+        - name: redirect-https
+          namespace: ingress
+      services:
+        - name: privacyidea-web
+          namespace: identity
+          port: 8080

@@ -1,0 +1,130 @@
+##############################################################################
+# OPTAVIM: MariaDB CR, 3-node Galera cluster (managed by mariadb-operator)
+# Namespace: databases
+#
+# On first reconcile, the operator:
+#   1. provisions 3 PVCs storage-mariadb-galera-{0,1,2} via storageClass nfs-client
+#   2. downloads the SQL dump from MinIO (spec.bootstrapFrom.s3)
+#   3. restores on galera-0, starts Galera (recovery enabled)
+#   4. SST to galera-1 then galera-2
+#   5. exposes Service mariadb-galera.databases.svc.cluster.local:3306
+#
+# targetRecoveryTime MUST match the dump timestamp (file name
+# backup.YYYY-MM-DDTHH:MM:SSZ.sql). To fill in before the apply.
+##############################################################################
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb-galera
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  # We stay on the LTS 11.4-noble (latest 11.4.x). Keycloak 24.0.3 (our prod)
+  # is only tested up to MariaDB 11.4 (issue keycloak/keycloak#42356, fix expected
+  # in Keycloak 26.4). The move to 11.8 will come with a future Keycloak migration.
+  image: mariadb:11.4-noble
+  imagePullPolicy: IfNotPresent
+
+  replicas: 3
+  port: 3306
+
+  # Root password
+  rootPasswordSecretKeyRef:
+    name: mariadb-root-password
+    key: password
+
+  # === Galera multi-master ===
+  galera:
+    enabled: true
+    # Automatic recovery based on grastate.dat: the operator restarts the
+    # cluster on its own, no manual recovery to run.
+    recovery:
+      enabled: true
+      minClusterSize: 1       # bootstrap from 1 pod if grastate is unclear
+      clusterMonitorInterval: 30s
+    # SST method (consistent with current setup)
+    sst: mariabackup
+    # Inter-pod replication
+    replicaThreads: 1
+
+  # === Storage ===
+  storage:
+    size: 5Gi
+    storageClassName: nfs-client
+    resizeInUseVolumes: true
+    waitForVolumeResize: true
+
+  # === Bootstrap from the SQL dump ===
+  # Set targetRecoveryTime to the dump timestamp once the dump has been taken.
+  bootstrapFrom:
+    s3:
+      bucket: mariadb-backups
+      prefix: ""
+      endpoint: minio.mariadb-backup.svc.cluster.local:9000
+      tls:
+        enabled: false        # MinIO internal on the LAN, no TLS here
+      accessKeyIdSecretKeyRef:
+        # The minio-creds Secret is in the mariadb-backup ns; mariadb-operator
+        # supports referencing a cross-namespace Secret via spec.bootstrapFrom.s3
+        # so we also copied its keys into the databases ns (see 02-secrets.yaml)
+        name: minio-creds
+        key: accessKey
+      secretAccessKeySecretKeyRef:
+        name: minio-creds
+        key: secretKey
+    # Placeholder: set the dump timestamp by hand (file name format
+    # backup.YYYY-MM-DDTHH:MM:SSZ.sql) before the apply.
+    targetRecoveryTime: "2026-06-07T00:00:00Z"
+
+  # === Anti-affinity 1 pod per worker ===
+  affinity:
+    antiAffinityEnabled: true
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          podAffinityTerm:
+            labelSelector:
+              matchExpressions:
+                - key: app.kubernetes.io/instance
+                  operator: In
+                  values: [mariadb-galera]
+            topologyKey: kubernetes.io/hostname
+
+  # securityContext: left to the mariadb operator (mysql image uid 999, already non-root).
+  # Forcing it here (runAsNonRoot/fsGroup/drop ALL) triggers a StatefulSet roll that
+  # can lose Galera quorum on restart (observed in test on the cluster).
+
+  # === Resources (modeled on current Galera) ===
+  resources:
+    requests:
+      cpu: 500m
+      memory: 800Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+
+  # === Metrics exporter for Prometheus ===
+  # Enabled from the start: automatic ServiceMonitor, official mariadb-operator
+  # Grafana dashboard available.
+  metrics:
+    enabled: true
+    # mysqld-exporter sidecar: securityContext left at default. The image uses
+    # the "nobody" user (non-numeric), incompatible with an explicit runAsNonRoot
+    # (CreateContainerConfigError, observed in test on the cluster).
+
+  # === Service exposure ===
+  # The operator creates automatically:
+  #   - mariadb-galera (ClusterIP, primary write endpoint)
+  #   - mariadb-galera-internal (headless, inter-pod replication)
+  # The "galera" Service alias will be created in Phase 3 (06-service-alias.yaml).
+
+  # === Galera-safe update strategy ===
+  # ReplicasFirstPrimaryLast: replicas updated first, primary last
+  # so quorum is preserved during the rolling update.
+  updateStrategy:
+    type: ReplicasFirstPrimaryLast
+
+  # === Pod policy ===
+  podDisruptionBudget:
+    maxUnavailable: 1         # keeps 2 nodes UP during a node drain

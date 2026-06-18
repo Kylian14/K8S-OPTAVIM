@@ -1,0 +1,57 @@
+/* ============================================================================
+ * OPTAVIM: Account console theme
+ * Light override on the account console v3 (React app by Keycloak)
+ * ========================================================================= */
+
+:root {
+  --optavim-blue-deep:   #0b3954;
+  --optavim-blue-bright: #2563eb;
+  --optavim-blue-tint:   #e0eaf5;
+  --optavim-text:        #1f2937;
+}
+
+/* Nav top bar: primary color */
+header.pf-c-page__header,
+.pf-c-page__header {
+  background: linear-gradient(90deg, var(--optavim-blue-deep), var(--optavim-blue-bright)) !important;
+  color: #ffffff !important;
+}
+
+.pf-c-page__header-brand-link,
+.pf-c-page__header-brand-link::before {
+  color: #ffffff !important;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+/* Primary buttons */
+.pf-c-button.pf-m-primary {
+  background: var(--optavim-blue-bright) !important;
+  border-color: var(--optavim-blue-bright) !important;
+}
+
+.pf-c-button.pf-m-primary:hover {
+  background: var(--optavim-blue-deep) !important;
+  border-color: var(--optavim-blue-deep) !important;
+}
+
+/* Links */
+a {
+  color: var(--optavim-blue-bright) !important;
+}
+
+a:hover {
+  color: var(--optavim-blue-deep) !important;
+}
+
+/* Footer slogan (optional) */
+body::after {
+  content: "OPTAVIM — Optimisation · Vision · Ambition";
+  display: block;
+  text-align: center;
+  color: rgba(11, 57, 84, 0.5);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  padding: 1.5rem 0;
+  font-weight: 500;
+}

@@ -1,0 +1,186 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-dashboard
+  namespace: security
+  labels:
+    app: wazuh-dashboard
+    project: optavim
+spec:
+  selector:
+    app: wazuh-dashboard
+  ports:
+    - name: https
+      port: 5601
+      targetPort: 5601
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wazuh-dashboard
+  namespace: security
+  labels:
+    app: wazuh-dashboard
+    project: optavim
+    phase: "7"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wazuh-dashboard
+  template:
+    metadata:
+      labels:
+        app: wazuh-dashboard
+        project: optavim
+      annotations:
+        ignore-check.kube-linter.io/no-read-only-root-fs: "OpenSearch Dashboards rewrites /usr/share/wazuh-dashboard/{data,optimize} + postStart sed on wazuh.yml; read-only rootfs would break the UI"
+    spec:
+      securityContext:
+        # The wazuh-dashboard image runs as uid 1000 (non-root) by default.
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 101
+      # The wazuh-dashboard image references "wazuh.indexer" (with a dot) in
+      # its internal config. Our Service is `wazuh-indexer` (hyphen). We alias
+      # via hostAliases pointing at the Service stable ClusterIP.
+      # If the Service is recreated (rare), update these IPs or
+      # patch via kubectl get svc to get the new ClusterIP.
+      hostAliases:
+        - ip: "10.201.201.53"     # wazuh-indexer ClusterIP
+          hostnames: ["wazuh.indexer"]
+        - ip: "10.201.225.90"     # wazuh-manager ClusterIP
+          hostnames: ["wazuh.manager"]
+      containers:
+        - name: wazuh-dashboard
+          image: wazuh/wazuh-dashboard:4.8.2
+          # trivy:ignore:KSV-0014 OpenSearch Dashboards rewrites /usr/share/wazuh-dashboard/{data,optimize} + postStart sed on wazuh.yml; read-only rootfs would break the UI. Runs as non-root uid 1000, dedicated namespace + NetworkPolicy.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: INDEXER_USERNAME
+              value: "admin"
+            - name: INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-secret
+                  key: INDEXER_PASSWORD
+            - name: WAZUH_API_URL
+              value: "https://wazuh-manager.security.svc.cluster.local"
+            - name: API_USERNAME
+              value: "wazuh-wui"
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-secret
+                  key: API_PASSWORD
+            # The internal 'kibanaserver' account lets the dashboard talk
+            # to the indexer. Its default password in the Wazuh image
+            # is 'kibanaserver' (reserved like admin, not changeable via API).
+            - name: DASHBOARD_USERNAME
+              value: "kibanaserver"
+            - name: DASHBOARD_PASSWORD
+              value: "kibanaserver"
+            - name: OPENSEARCH_HOSTS
+              value: "https://wazuh-indexer.security.svc.cluster.local:9200"
+            - name: SERVER_SSL_ENABLED
+              value: "true"
+            - name: SERVER_SSL_CERTIFICATE
+              value: "/usr/share/wazuh-dashboard/config/certs/dashboard.pem"
+            - name: SERVER_SSL_KEY
+              value: "/usr/share/wazuh-dashboard/config/certs/dashboard-key.pem"
+          ports:
+            - name: https
+              containerPort: 5601
+          # The wazuh.yml lives in the container rootfs (written by the image on
+          # first boot). On pod restart it reverts to the default version
+          # which does not reference the manager API CA, causing an AxiosError in the UI.
+          # This postStart re-injects the `ca:` line idempotently after start.
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - |
+                    F=/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+                    for i in 1 2 3 4 5; do [ -f "$F" ] && break; sleep 2; done
+                    if [ -f "$F" ] && ! grep -q "wazuh-manager-api-ca.crt" "$F"; then
+                      sed -i 's|run_as: false|run_as: false\n      ca: /usr/share/wazuh-dashboard/config/wazuh-manager-api-ca.crt|' "$F"
+                    fi
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "300m"
+              memory: "512Mi"
+          volumeMounts:
+            # The dashboard looks for its certs at this exact path in
+            # its default opensearch_dashboards.yml.
+            - name: certs
+              mountPath: /usr/share/wazuh-dashboard/config/certs/dashboard.pem
+              subPath: wazuh-dashboard.pem
+              readOnly: true
+            - name: certs
+              mountPath: /usr/share/wazuh-dashboard/config/certs/dashboard-key.pem
+              subPath: wazuh-dashboard-key.pem
+              readOnly: true
+            - name: certs
+              mountPath: /usr/share/wazuh-dashboard/config/certs/root-ca.pem
+              subPath: root-ca.pem
+              readOnly: true
+            # Dashboard config patched with OIDC (ConfigMap wazuh-dashboard-config)
+            - name: dashboard-config
+              mountPath: /usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+              subPath: opensearch_dashboards.yml
+              readOnly: true
+            # AD CS root CA (used by OIDC to validate the Keycloak cert)
+            - name: ca-cert
+              mountPath: /usr/share/wazuh-dashboard/config/certs/optavim-ca.pem
+              subPath: optavim-ca.pem
+              readOnly: true
+            # Self-signed cert of the Wazuh Manager API (port 55000). The dashboard
+            # validates TLS before calling the API, so without this CA Axios fails with
+            # "Error getting the authorization token". Cert extracted from the
+            # manager pod via kubectl exec + configmap (see README, wazuh section).
+            - name: manager-api-ca
+              mountPath: /usr/share/wazuh-dashboard/config/wazuh-manager-api-ca.crt
+              subPath: wazuh-manager-api-ca.crt
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 5601
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 5601
+            initialDelaySeconds: 120
+            periodSeconds: 30
+      volumes:
+        - name: certs
+          secret:
+            secretName: wazuh-certs-dashboard
+            defaultMode: 0400
+        - name: dashboard-config
+          configMap:
+            name: wazuh-dashboard-config
+        - name: ca-cert
+          secret:
+            secretName: wazuh-dashboard-ca
+            defaultMode: 0444
+        - name: manager-api-ca
+          configMap:
+            name: wazuh-manager-api-ca

@@ -1,0 +1,64 @@
+##############################################################################
+# OPTAVIM SNMP exporter config (pfSense + switches)
+#
+# Generating this config:
+#   docker run --rm -v $(pwd):/etc/snmp_exporter prom/snmp-generator:v0.26.0 generate
+#   with generator.yml targeting the pfSense MIBs (BSD UCD-SNMP-MIB) + IF-MIB.
+#
+# For OPTAVIM we keep it simple: module `if_mib` (interfaces) + `pfsense_ucd`
+# (CPU load, memory, disk via UCD-SNMP-MIB that pfSense exposes natively).
+#
+# pfSense prerequisites:
+#   Services > SNMP > Enable, community v2c = "CHANGE_ME_snmp_community"
+#   Bind interface = LAN only (never WAN)
+#   FW rule: permit udp/161 from the monitoring VLAN (10.1.50.0/24 to 10.1.10.0/24)
+##############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snmp-exporter
+  namespace: monitoring
+  labels:
+    app: snmp-exporter
+    project: optavim
+    component: metrics
+data:
+  snmp.yml: |
+    auths:
+      optavim_v2:
+        version: 2
+        community: CHANGE_ME_snmp_community
+
+    modules:
+      # Network interfaces (RFC 2863 + IF-MIB)
+      if_mib:
+        walk:
+          - 1.3.6.1.2.1.2          # interfaces
+          - 1.3.6.1.2.1.31.1.1     # ifXTable
+        lookups:
+          - source_indexes: [ifIndex]
+            lookup: ifDescr
+            drop_source_indexes: false
+          - source_indexes: [ifIndex]
+            lookup: ifName
+            drop_source_indexes: false
+        overrides:
+          ifAlias:
+            ignore: false
+            type: DisplayString
+          ifDescr:
+            ignore: false
+            type: DisplayString
+
+      # pfSense CPU/mem/disk load via UCD-SNMP-MIB (FreeBSD standard)
+      pfsense_ucd:
+        walk:
+          - 1.3.6.1.4.1.2021.4      # memory
+          - 1.3.6.1.4.1.2021.9      # disk usage
+          - 1.3.6.1.4.1.2021.10     # CPU loadavg
+          - 1.3.6.1.4.1.2021.11     # CPU usage
+          - 1.3.6.1.2.1.1           # system uptime + descr
+        overrides:
+          sysDescr:
+            ignore: false
+            type: DisplayString

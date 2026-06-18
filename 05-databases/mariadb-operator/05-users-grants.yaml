@@ -1,0 +1,240 @@
+##############################################################################
+# OPTAVIM: User + Grant CRDs (5 application accounts)
+# Namespace: databases
+#
+# Declarative management of the mariadb accounts. Each User has its password
+# referenced from the mariadb-app-passwords Secret. Each Grant gives ALL PRIVILEGES
+# on the matching schema.
+#
+# Note: the User CRD runs CREATE OR REPLACE USER on reconcile. If the account
+# already exists (after bootstrap), the password is reset from the Secret.
+##############################################################################
+
+###############################################################################
+# 1. KEYCLOAK
+###############################################################################
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: keycloak
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: keycloak
+  host: "%"
+  maxUserConnections: 100
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: keycloak-all-privileges
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  privileges: ["ALL PRIVILEGES"]
+  database: "keycloak_db"
+  table: "*"
+  username: keycloak
+  host: "%"
+  grantOption: false
+
+###############################################################################
+# 2. NEXTCLOUD
+###############################################################################
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: nextcloud
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: nextcloud
+  host: "%"
+  maxUserConnections: 100
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: nextcloud-all-privileges
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  privileges: ["ALL PRIVILEGES"]
+  database: "nextcloud_db"
+  table: "*"
+  username: nextcloud
+  host: "%"
+
+###############################################################################
+# 3. DOLIBARR
+###############################################################################
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: dolibarr
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: dolibarr
+  host: "%"
+  maxUserConnections: 100
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: dolibarr-all-privileges
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  privileges: ["ALL PRIVILEGES"]
+  database: "dolibarr_db"
+  table: "*"
+  username: dolibarr
+  host: "%"
+
+###############################################################################
+# 4. ORANGEHRM
+# Warning, runtime DISCOVERY MO-5 (2026-06-07):
+#    OrangeHRM's Conf.php (/var/www/html/lib/confs/Conf.php) hardcodes the
+#    `orangehrm_admin` user (NOT `orangehrm` as the DATABASE_USER env
+#    suggested). We create TWO users on the DB side:
+#    - `orangehrm` (main User CRD, keeps a consistent logical name)
+#    - `orangehrm_admin` (compat with the orangehrm:5.7 container Conf.php)
+###############################################################################
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: orangehrm
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: orangehrm
+  host: "%"
+  maxUserConnections: 100
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: orangehrm-admin
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  # mariadb-operator derives the SQL name from metadata.name if not overridden
+  # We explicitly force name=orangehrm_admin (otherwise translated to orangehrm-admin)
+  name: orangehrm_admin
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: orangehrm
+  host: "%"
+  maxUserConnections: 100
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: orangehrm-all-privileges
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  privileges: ["ALL PRIVILEGES"]
+  database: "orangehrm_db"
+  table: "*"
+  username: orangehrm
+  host: "%"
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: orangehrm-admin-all-privileges
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  privileges: ["ALL PRIVILEGES"]
+  database: "orangehrm_db"
+  table: "*"
+  username: orangehrm_admin
+  host: "%"
+
+###############################################################################
+# 5. PRIVACYIDEA
+###############################################################################
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: User
+metadata:
+  name: privacyidea
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  passwordSecretKeyRef:
+    name: mariadb-app-passwords
+    key: privacyidea
+  host: "%"
+  maxUserConnections: 100
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Grant
+metadata:
+  name: privacyidea-all-privileges
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+  privileges: ["ALL PRIVILEGES"]
+  database: "privacyidea_db"
+  table: "*"
+  username: privacyidea
+  host: "%"

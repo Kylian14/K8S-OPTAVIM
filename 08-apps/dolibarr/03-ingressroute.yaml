@@ -1,0 +1,46 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dolibarr-https
+  namespace: apps
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`erp.optavim.corp`)
+      kind: Rule
+      services:
+        - name: dolibarr
+          namespace: apps
+          port: 80
+          # Sticky sessions: avoids "Jeton de sécurité expiré" when the
+          # client switches between the 2 pods. The DOLI_STICKY cookie pins
+          # the session to the pod that created it.
+          sticky:
+            cookie:
+              name: DOLI_STICKY
+              secure: true
+              httpOnly: true
+              sameSite: lax
+  tls:
+    secretName: optavim-wildcard-tls
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: dolibarr-http
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`erp.optavim.corp`)
+      kind: Rule
+      middlewares:
+        - name: redirect-https
+          namespace: ingress
+      services:
+        - name: dolibarr
+          namespace: apps
+          port: 80

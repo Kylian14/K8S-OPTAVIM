@@ -1,0 +1,50 @@
+---
+# Dashboard Wazuh (HTTPS backend, TLS passthrough via Traefik serversTransport)
+apiVersion: traefik.io/v1alpha1
+kind: ServersTransport
+metadata:
+  name: insecure-tls
+  namespace: security
+spec:
+  insecureSkipVerify: true   # dashboard uses a self-signed cert
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: wazuh-https
+  namespace: security
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`wazuh.optavim.corp`)
+      kind: Rule
+      services:
+        - name: wazuh-dashboard
+          namespace: security
+          port: 5601
+          scheme: https
+          serversTransport: insecure-tls
+  tls:
+    secretName: optavim-wildcard-tls
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: wazuh-http
+  namespace: security
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`wazuh.optavim.corp`)
+      kind: Rule
+      middlewares:
+        - name: redirect-https
+          namespace: ingress
+      services:
+        - name: wazuh-dashboard
+          namespace: security
+          port: 5601
+          scheme: https
+          serversTransport: insecure-tls

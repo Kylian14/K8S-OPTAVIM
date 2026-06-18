@@ -1,0 +1,16 @@
+# AD CS root certificate, used for Keycloak LDAPS federation to AD.
+# Equivalent to the truststore but in PEM format, usable by other pods
+# (debug tools, sidecars).
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ldap-ca-cert
+  namespace: auth
+  labels:
+    project: optavim
+type: Opaque
+stringData:
+  ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    # CHANGE_ME: content of /tmp/optavim-ad-root.pem above
+    -----END CERTIFICATE-----

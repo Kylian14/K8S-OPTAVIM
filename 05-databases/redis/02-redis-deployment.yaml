@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: databases
+  labels:
+    app: redis
+    phase: "5"
+    project: optavim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+        phase: "5"
+        project: optavim
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999          # redis user in redis:*-alpine image
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # trivy:ignore:AVD-KSV-0020 redis image ships a fixed non-root 'redis' uid 999; a >10000 uid would not own the image's baked-in files
+        # trivy:ignore:AVD-KSV-0021 redis image ships a fixed non-root 'redis' gid 999; a >10000 gid would mismatch image file ownership
+        - name: redis
+          image: redis:7.2.4-alpine
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          command:
+            - redis-server
+            - --maxmemory
+            - "110mb"
+            - --maxmemory-policy
+            - allkeys-lru
+            - --save
+            - ""
+            - --appendonly
+            - "no"
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "150m"
+            limits:
+              memory: "128Mi"
+              cpu: "150m"
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: redis-tmp
+              mountPath: /tmp
+            # redis working dir (WORKDIR /data). Cache-only here (--save "" /
+            # --appendonly no = no persistence) but the process still chdir's
+            # to /data, so it must stay writable under readOnlyRootFilesystem.
+            - name: redis-data
+              mountPath: /data
+      volumes:
+        - name: redis-tmp
+          emptyDir: {}
+        - name: redis-data
+          emptyDir: {}

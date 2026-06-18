@@ -1,0 +1,46 @@
+# ==============================================================================
+# Traefik TLS Configuration (namespace: ingress)
+# Default TLSStore + TLSOption for ingress TLS
+#
+# The "default" TLSStore tells Traefik to use the wildcard certificate
+# for all HTTPS connections without a specific certificate
+# ==============================================================================
+
+---
+# Default TLSStore: uses the ADCS wildcard certificate
+apiVersion: traefik.io/v1alpha1
+kind: TLSStore
+metadata:
+  name: default
+  namespace: ingress
+  labels:
+    app: traefik
+    phase: "6"
+    project: optavim
+spec:
+  defaultCertificate:
+    secretName: optavim-wildcard-tls
+
+---
+# TLSOption: hardened TLS settings
+apiVersion: traefik.io/v1alpha1
+kind: TLSOption
+metadata:
+  name: default
+  namespace: ingress
+  labels:
+    app: traefik
+    phase: "6"
+    project: optavim
+spec:
+  # TLS 1.2 minimum (no TLS 1.0/1.1)
+  minVersion: VersionTLS12
+  # Recommended cipher suites
+  cipherSuites:
+    - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+    - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+  # Preferred curves
+  curvePreferences:
+    - X25519
+    - CurveP256

@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: dolibarr-ldap-sync
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dolibarr-ldap-sync
+  namespace: apps
+# The sync has no API of its own, so the CronJob runs
+# sync_users_ldap2dolibarr.php with `kubectl exec` inside the running dolibarr
+# pod, which needs pods/exec. The scope is kept small: a namespaced Role (not a
+# ClusterRole), only get/list pods plus create/get pods/exec in `apps`, bound to
+# a dedicated dolibarr-ldap-sync ServiceAccount.
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dolibarr-ldap-sync
+  namespace: apps
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: dolibarr-ldap-sync
+subjects:
+  - kind: ServiceAccount
+    name: dolibarr-ldap-sync
+    namespace: apps
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dolibarr-ldap-sync
+  namespace: apps
+  labels:
+    app: dolibarr
+    component: ldap-sync
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 7200   # finished jobs cleaned up after 2h
+      template:
+        metadata:
+          annotations:
+            ignore-check.kube-linter.io/run-as-non-root: "alpine/k8s kubectl helper; read-only get/list plus exec into the app pod, isolated to the apps namespace"
+        spec:
+          # Pod-level seccomp baseline (RuntimeDefault).
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          restartPolicy: Never
+          serviceAccountName: dolibarr-ldap-sync
+          automountServiceAccountToken: true   # required: kubectl uses the SA token to exec into the app pod
+          containers:
+            - name: ldap-sync
+              image: alpine/k8s:1.30.5
+              # Baseline hardening for the kubectl helper. Not forced non-root
+              # or read-only FS: kubectl writes a discovery/HTTP cache under $HOME.
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                requests: {cpu: "50m", memory: "64Mi"}
+                limits: {cpu: "200m", memory: "128Mi"}
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -e
+                  POD=$(kubectl get pod -n apps -l app=dolibarr -o jsonpath="{.items[0].metadata.name}")
+                  echo "[$(date -Iseconds)] Sync via pod $POD"
+                  kubectl exec -n apps "$POD" -- env LDAPTLS_REQCERT=never bash -c "cd /var/www/scripts/user && php sync_users_ldap2dolibarr.php nocommitiferror -y" 2>&1 | grep -vE "^PHP Warning|^Mails sending|^---|host=|port=|login=|pass=|DN to|Filter=|type=|database=|commitiferror=|excludeuser=|Mapped|Options:"
+                  echo "[$(date -Iseconds)] Done"

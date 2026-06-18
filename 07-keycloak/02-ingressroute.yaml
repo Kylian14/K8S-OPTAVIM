@@ -1,0 +1,38 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: keycloak-https
+  namespace: auth
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`auth.optavim.corp`)
+      kind: Rule
+      services:
+        - name: keycloak
+          namespace: auth
+          port: 8080
+  tls:
+    secretName: optavim-wildcard-tls
+---
+# HTTP to HTTPS redirection
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: keycloak-http
+  namespace: auth
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`auth.optavim.corp`)
+      kind: Rule
+      middlewares:
+        - name: redirect-https
+          namespace: ingress
+      services:
+        - name: keycloak
+          namespace: auth
+          port: 8080

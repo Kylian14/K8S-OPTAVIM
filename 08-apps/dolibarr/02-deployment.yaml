@@ -1,0 +1,198 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dolibarr
+  namespace: apps
+  labels:
+    app: dolibarr
+    project: optavim
+spec:
+  selector:
+    app: dolibarr
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dolibarr
+  namespace: apps
+  labels:
+    app: dolibarr
+    project: optavim
+    phase: "6"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: dolibarr
+  template:
+    metadata:
+      labels:
+        app: dolibarr
+        project: optavim
+      annotations:
+        # The official dolibarr apache image starts as root to fix up
+        # permissions, then drops to www-data and writes into the web root.
+        # runAsNonRoot or a read-only root FS break that, so we skip both.
+        # The pod stays isolated by namespace + NetworkPolicy.
+        ignore-check.kube-linter.io/run-as-non-root: "apache image needs a root entrypoint and a writable web root; isolated by namespace + NetworkPolicy"
+        ignore-check.kube-linter.io/no-read-only-root-fs: "apache image writes to the web root and its runtime dirs; isolated by namespace + NetworkPolicy"
+    spec:
+      # Pod-level seccomp baseline (RuntimeDefault) for every container and init
+      # container. We don't set runAsNonRoot: the apache entrypoint needs root.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: dolibarr
+                topologyKey: kubernetes.io/hostname
+      # Adds the AD CS root CA to the system bundle so PHP cURL (openid_connect
+      # driver to https://auth.optavim.corp) trusts the AD CS cert.
+      initContainers:
+        - name: inject-ca
+          image: dolibarr/dolibarr:19
+          command:
+            - sh
+            - -c
+            - |
+              cp /etc/ssl/certs/ca-certificates.crt /ca-bundle/ca-certificates.crt
+              cat /ca/optavim-ca.pem >> /ca-bundle/ca-certificates.crt
+              echo "CA AD CS appended"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+            readOnlyRootFilesystem: true   # only writes to /ca-bundle (emptyDir)
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "64Mi"}
+          volumeMounts:
+            - name: optavim-ca
+              mountPath: /ca/optavim-ca.pem
+              subPath: optavim-ca.pem
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /ca-bundle
+      containers:
+        - name: dolibarr
+          image: dolibarr/dolibarr:19
+          # seccomp RuntimeDefault and no privilege escalation are safe here.
+          # We don't drop caps or force non-root: the entrypoint needs root to
+          # fix permissions and bind apache on port 80 before dropping to
+          # www-data. Forcing either would crash-loop the pod. The web root has
+          # to stay writable for the same reason; the pod is isolated by
+          # namespace + NetworkPolicy.
+          # apache binds :80 (NET_BIND_SERVICE) + entrypoint chown/setuid of the web root.
+          # drop:[ALL] alone made the :80 bind fail (observed in runtime testing).
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "NET_BIND_SERVICE"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            - name: DOLI_DB_TYPE
+              value: "mysqli"
+            - name: DOLI_DB_HOST
+              value: "galera.databases.svc.cluster.local"
+            - name: DOLI_DB_PORT
+              value: "3306"
+            - name: DOLI_DB_NAME
+              value: "dolibarr_db"
+            - name: DOLI_DB_USER
+              value: "dolibarr"
+            - name: DOLI_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dolibarr-secret
+                  key: DOLI_DB_PASSWORD
+            - name: DOLI_ADMIN_LOGIN
+              value: "admin"
+            - name: DOLI_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dolibarr-secret
+                  key: DOLI_ADMIN_PASSWORD
+            - name: DOLI_URL_ROOT
+              value: "https://erp.optavim.corp"
+            - name: DOLI_INSTALL_AUTO
+              value: "1"
+            - name: DOLI_PROD
+              value: "1"
+            - name: DOLI_HTTPS
+              value: "1"
+            # SSO Keycloak OIDC (native Dolibarr 19 driver). We also keep the
+            # local Dolibarr login for the initial admin and a fallback account.
+            # The MAIN_AUTHENTICATION_OIDC_* constants are stored in the DB.
+            - name: DOLI_AUTH
+              value: "openid_connect,dolibarr"
+            # We do not validate the self-signed cert for LDAPS to AD
+            # (10.1.20.x:636). The LDAP sync to Dolibarr (CronJob
+            # dolibarr-ldap-sync) and the PHP-LDAP bind go out over ldaps:// with
+            # the self-signed AD CS cert.
+            - name: LDAPTLS_REQCERT
+              value: "never"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/documents
+            # System CA bundle + AD CS root (prepared by the initContainer) so
+            # PHP cURL trusts auth.optavim.corp for the Keycloak OIDC.
+            - name: ca-bundle
+              mountPath: /etc/ssl/certs/ca-certificates.crt
+              subPath: ca-certificates.crt
+              readOnly: true
+          # The DB schema import can take 3 to 8 min on first boot.
+          # The startupProbe holds off the livenessProbe during that time.
+          startupProbe:
+            tcpSocket:
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 60     # 10 min max
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 80
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pv-dolibarr-data
+        - name: optavim-ca
+          configMap:
+            name: dolibarr-ca
+        - name: ca-bundle
+          emptyDir: {}

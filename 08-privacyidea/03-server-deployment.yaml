@@ -1,0 +1,194 @@
+# privacyIDEA Server (web + API), 1 replica
+# Image kheeklab/privacyidea (Python Gunicorn, port 8080)
+# DB: MariaDB Galera (galera.databases.svc:3306/privacyidea_db)
+# Persistence: NFS PVC /etc/privacyidea/ (enckey, configs)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privacyidea-server
+  namespace: identity
+  labels:
+    app: privacyidea-server
+    project: optavim
+    phase: "9"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # PVC RWX is safe but this avoids 2 pods writing the enckey in parallel at boot
+  selector:
+    matchLabels:
+      app: privacyidea-server
+  template:
+    metadata:
+      labels:
+        app: privacyidea-server
+      annotations:
+        # Custom kheeklab/privacyidea image: the entrypoint runs pi-manage setup
+        # (create_tables / create_enckey / create_audit_keys) and writes the
+        # encryption material to the /etc/privacyidea PVC at boot. The runtime
+        # user is not confirmed for this image, so runAsNonRoot is not forced and
+        # the root filesystem is left writable to avoid crash-looping the
+        # bootstrap. The container still drops ALL caps + blocks privilege
+        # escalation + RuntimeDefault seccomp, and the workload is isolated by
+        # the 'identity' namespace.
+        ignore-check.kube-linter.io/run-as-non-root: "custom kheeklab/privacyidea image runtime uid unconfirmed; entrypoint pi-manage setup may need root; caps dropped + no-priv-esc + RuntimeDefault seccomp applied; isolated by namespace"
+        ignore-check.kube-linter.io/no-read-only-root-fs: "kheeklab/privacyidea entrypoint writes enckey/audit keys to /etc/privacyidea PVC and pi-manage bootstrap writes to the rootfs; read-only rootfs would crash-loop boot"
+    spec:
+      # Pod securityContext: RuntimeDefault seccomp at pod level so every
+      # container (incl. busybox init) inherits the same seccomp baseline.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: privacyidea
+          image: docker.io/kheeklab/privacyidea:3.13.1
+          imagePullPolicy: IfNotPresent
+          # Container securityContext: baseline for a custom image whose runtime
+          # user we haven't confirmed. Drops ALL caps, blocks privilege
+          # escalation, RuntimeDefault seccomp. runAsNonRoot / readOnlyRootFilesystem
+          # left off on purpose (see pod-template annotations above).
+          # trivy:ignore:KSV-0014 root filesystem left writable: pi-manage bootstrap + enckey/audit-key generation write to the rootfs and PVC at boot
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            # --- DB Galera: full URI (PI_DB_VENDOR builds a broken prefix with ?charset) ---
+            - name: PI_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: privacyidea-secret
+                  key: PI_DB_PASSWORD
+            - name: SQLALCHEMY_DATABASE_URI
+              value: "mysql+pymysql://privacyidea:$(PI_DB_PASSWORD)@galera.databases.svc.cluster.local:3306/privacyidea_db"
+            # --- Local portal admin ---
+            - name: PI_ADMIN_USER
+              value: "admin"
+            - name: PI_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: privacyidea-secret
+                  key: PI_ADMIN_PASSWORD
+            # --- Encryption / security ---
+            - name: PI_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: privacyidea-secret
+                  key: PI_ENCKEY
+            - name: PI_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: privacyidea-secret
+                  key: PI_ENCKEY
+            # --- kheeklab paths: image expects everything in $PI_DATA_DIR (= /data/privacyidea
+            # by default). Since we mount the PVC on /etc/privacyidea, we redirect
+            # all paths to /etc/privacyidea. Otherwise the entrypoint crashes because
+            # ${PI_DATA_DIR}/keys/encfile is missing, pi-manage create_enckey refuses
+            # because /etc/privacyidea/enckey already exists (mismatch) → exit 1.
+            - name: PI_DATA_DIR
+              value: "/etc/privacyidea"
+            - name: PI_ENCFILE
+              value: "/etc/privacyidea/keys/encfile"
+            - name: PI_AUDIT_KEY_PRIVATE_PATH
+              value: "/etc/privacyidea/keys/private.pem"
+            - name: PI_AUDIT_KEY_PUBLIC_PATH
+              value: "/etc/privacyidea/keys/public.pem"
+            # --- Misc ---
+            - name: PI_SKIP_BOOTSTRAP
+              value: "false"   # bootstrap initial (create tables, create enckey)
+            - name: GUNICORN_PORT
+              value: "8080"
+          # initContainer to ensure /etc/privacyidea/keys/ exists with
+          # the right perms (chown nobody, chmod 775). Otherwise pi-manage setup
+          # create_audit_keys fails with PermissionError (the directory created by
+          # busybox/init is root:root 755).
+          # NB: if we ever RE-populate the PVC from scratch, the init container will
+          # be indispensable. For an existing cluster after this deployment, the
+          # keys/ directory has already been created and chowned manually to 65534:65534 0775.
+          volumeMounts:
+            - name: etc-privacyidea
+              mountPath: /etc/privacyidea
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+      initContainers:
+        - name: setup-keys-dir
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /etc/privacyidea/keys
+              chown -R 65534:65534 /etc/privacyidea/keys
+              chmod 0775 /etc/privacyidea/keys
+              # Compat: if enckey exists in the PVC root, create a symlink
+              # to keys/encfile so the entrypoint check passes.
+              if [ -f /etc/privacyidea/enckey ] && [ ! -e /etc/privacyidea/keys/encfile ]; then
+                ln -s ../enckey /etc/privacyidea/keys/encfile
+              fi
+              ls -la /etc/privacyidea/ /etc/privacyidea/keys/
+          # Container securityContext. busybox runs as root and the init only
+          # needs CHOWN to fix ownership of the keys dir on the PVC to uid 65534;
+          # all other caps dropped, privilege escalation blocked, RuntimeDefault
+          # seccomp. readOnlyRootFilesystem is fine here: it only writes to the
+          # /etc/privacyidea PVC mount.
+          # trivy:ignore:KSV-0004 CHOWN capability required to chown the PVC keys dir to uid 65534 for the privacyIDEA runtime user
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: { cpu: "50m", memory: "32Mi" }
+            limits:   { cpu: "100m", memory: "64Mi" }
+          volumeMounts:
+            - name: etc-privacyidea
+              mountPath: /etc/privacyidea
+      volumes:
+        - name: etc-privacyidea
+          persistentVolumeClaim:
+            claimName: pv-privacyidea-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: privacyidea-web
+  namespace: identity
+  labels:
+    app: privacyidea-server
+spec:
+  type: ClusterIP
+  selector:
+    app: privacyidea-server
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

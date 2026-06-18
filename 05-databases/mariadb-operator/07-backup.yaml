@@ -1,0 +1,84 @@
+##############################################################################
+# OPTAVIM: Scheduled Backup CRD (daily 02:00 to MinIO, 14-day retention)
+# Namespace: databases
+#
+# To create after the 7-day stable hold period (Phase 4).
+# The operator runs a daily mariabackup Job, physical dump to MinIO.
+#
+# Warning: do NOT apply before Phase 4 (otherwise we back up a cluster mid
+# migration, inconsistent state).
+##############################################################################
+
+---
+apiVersion: k8s.mariadb.com/v1alpha1
+kind: Backup
+metadata:
+  name: mariadb-galera-daily
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  mariaDbRef:
+    name: mariadb-galera
+
+  # === Schedule ===
+  schedule:
+    cron: "0 2 * * *"           # every day at 02:00 UTC (03:00/04:00 FR)
+    suspend: false
+
+  # === Retention ===
+  maxRetention: 336h            # 14 days (336h = 14x24)
+
+  # === Storage: MinIO ===
+  storage:
+    s3:
+      bucket: mariadb-backups
+      prefix: "scheduled/"
+      endpoint: minio.mariadb-backup.svc.cluster.local:9000
+      tls:
+        enabled: false
+      accessKeyIdSecretKeyRef:
+        name: minio-creds
+        key: accessKey
+      secretAccessKeySecretKeyRef:
+        name: minio-creds
+        key: secretKey
+
+  # === Compression + encryption ===
+  compression: gzip             # bzip2 smaller but 5x slower
+  # encryption:                 # enable if sensitive data; requires a Secret
+  #   ageSecretKeyRef: { name: backup-age-key, key: key }
+
+  # === Job resources ===
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  # === Security hardening of the Backup Job (mariadb image, mysql user uid 999) ===
+  # mariabackup writes in the staging area (emptyDir) -> we do NOT set
+  # readOnlyRootFilesystem. Non-root baseline + drop caps applied.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    capabilities:
+      drop: ["ALL"]
+
+  # === Job hygiene (operator equivalent of ttlSecondsAfterFinished:
+  # the Backup CRD manages the underlying Jobs and recycles them via these limits) ===
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  # === Job BackoffLimit ===
+  backoffLimit: 3

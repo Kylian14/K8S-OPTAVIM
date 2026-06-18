@@ -1,0 +1,39 @@
+{
+  "uid": "opta-net-infra",
+  "title": "OPTAVIM — Réseau",
+  "tags": ["optavim", "net", "snmp"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-6h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0}
+  ]},
+  "links": [{"title": "Executive", "url": "/d/opta-exec", "type": "link", "icon": "external link"}],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Disponibilité des sites",
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "probe_success{job=\"blackbox-http\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "orientation": "horizontal"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#22D3EE", "value": 1}]}, "mappings": [{"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}]}}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Temps de réponse des sites",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "probe_duration_seconds{job=\"blackbox-http\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "s"}}
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Codes HTTP par site",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "probe_http_status_code{job=\"blackbox-http\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "short"}}
+    }
+  ]
+}

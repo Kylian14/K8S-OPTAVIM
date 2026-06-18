@@ -1,0 +1,281 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    project: optavim
+spec:
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+    project: optavim
+    phase: "7"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+        project: optavim
+      annotations:
+        # chown-data initContainer must run as root (uid 0) to fix NFS PVC
+        # ownership: NFS does not honour fsGroup. Kept to a single init step.
+        ignore-check.kube-linter.io/run-as-non-root: "chown-data init step needs root to chown NFS PVC; main + branding containers run as grafana uid 472"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 472    # grafana-server GID
+        runAsUser: 472
+        runAsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # ──────────────────────────────────────────────────────────────────
+        # 1. Chown NFS PVC (NFS ignores fsGroup)
+        # ──────────────────────────────────────────────────────────────────
+        - name: chown-data
+          image: busybox:1.36
+          command: ["sh", "-c", "chown -R 472:472 /var/lib/grafana && chmod 775 /var/lib/grafana"]
+          securityContext:
+            # trivy:ignore:KSV-0014 chown-data init step requires root to fix NFS PVC ownership (NFS ignores fsGroup); writes only to the PVC mount
+            # trivy:ignore:KSV-0020 runs as root (uid 0) by design for the chown; not the long-lived process
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+              # CHOWN required to chown the NFS-backed PVC for the grafana user
+              add: ["CHOWN"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits:   {cpu: "100m", memory: "64Mi"}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+
+        # ──────────────────────────────────────────────────────────────────
+        # 2. OPTAVIM branding overlay
+        #    - Copy original /usr/share/grafana/public/ to emptyDir overlay
+        #    - Override img/grafana_icon.svg + img/grafana_typelogo.svg
+        #    - Drop optavim.css into css/
+        #    - Patch views/index.html: inject <link rel=stylesheet> (idempotent)
+        # ──────────────────────────────────────────────────────────────────
+        - name: branding-overlay
+          image: grafana/grafana:11.1.3
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              echo "[branding] Copying original Grafana public assets..."
+              cp -r /usr/share/grafana/public/. /overlay/
+
+              # Grafana 11 has no native /css/ (all in /build/ webpack), create it
+              mkdir -p /overlay/css
+
+              echo "[branding] Applying OPTAVIM logo + CSS..."
+              cp /branding/optavim-icon.svg /overlay/img/grafana_icon.svg
+              cp /branding/optavim-logo.svg /overlay/img/grafana_typelogo.svg
+              cp /branding/optavim.css      /overlay/css/optavim.css
+
+              # Idempotent: inject <link> only if absent
+              # Note: Go templates in index.html, sed on the </head> line
+              if ! grep -q 'optavim.css' /overlay/views/index.html; then
+                echo "[branding] Injecting optavim.css <link> into index.html..."
+                sed -i 's|</head>|  <link rel="stylesheet" href="public/css/optavim.css">\n</head>|' /overlay/views/index.html
+              else
+                echo "[branding] optavim.css link already present in index.html"
+              fi
+
+              echo "[branding] Done. Files:"
+              ls -la /overlay/css/optavim.css /overlay/img/grafana_icon.svg /overlay/img/grafana_typelogo.svg
+              echo "[branding] index.html head section:"
+              grep -A 1 -B 1 optavim.css /overlay/views/index.html | head -5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits:   {cpu: "200m", memory: "256Mi"}
+          volumeMounts:
+            - name: public-overlay
+              mountPath: /overlay
+            - name: branding
+              mountPath: /branding
+              readOnly: true
+
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.1.3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # ── Initial admin ──────────────────────────────────────
+            - name: GF_SECURITY_ADMIN_USER
+              value: "admin"
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secret
+                  key: GRAFANA_ADMIN_PASSWORD
+            # ── Server ─────────────────────────────────────────────
+            - name: GF_SERVER_ROOT_URL
+              value: "https://grafana.optavim.corp"
+            - name: GF_SERVER_SERVE_FROM_SUB_PATH
+              value: "false"
+            # ── OIDC Keycloak ──────────────────────────────────────
+            - name: GF_AUTH_GENERIC_OAUTH_ENABLED
+              value: "true"
+            - name: GF_AUTH_GENERIC_OAUTH_NAME
+              value: "OPTAVIM SSO"
+            - name: GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP
+              value: "true"
+            - name: GF_AUTH_GENERIC_OAUTH_CLIENT_ID
+              value: "grafana"
+            - name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-secret
+                  key: OIDC_CLIENT_SECRET
+            - name: GF_AUTH_GENERIC_OAUTH_SCOPES
+              value: "openid profile email"
+            - name: GF_AUTH_GENERIC_OAUTH_AUTH_URL
+              value: "https://auth.optavim.corp/realms/OPTAVIM/protocol/openid-connect/auth"
+            - name: GF_AUTH_GENERIC_OAUTH_TOKEN_URL
+              value: "https://auth.optavim.corp/realms/OPTAVIM/protocol/openid-connect/token"
+            - name: GF_AUTH_GENERIC_OAUTH_API_URL
+              value: "https://auth.optavim.corp/realms/OPTAVIM/protocol/openid-connect/userinfo"
+            - name: GF_AUTH_GENERIC_OAUTH_TLS_SKIP_VERIFY_INSECURE
+              value: "true"    # internal AD CS, cert not publicly trusted
+            # Not all AD users have an email set, so Grafana attempts a
+            # /userinfo/emails fallback (GitHub pattern) that returns 404.
+            # We map "email" onto preferred_username (no email, true,
+            # but no more 404 and the user can log in).
+            - name: GF_AUTH_GENERIC_OAUTH_EMAIL_ATTRIBUTE_PATH
+              value: "email || preferred_username"
+            - name: GF_AUTH_GENERIC_OAUTH_LOGIN_ATTRIBUTE_PATH
+              value: "preferred_username"
+            - name: GF_AUTH_GENERIC_OAUTH_NAME_ATTRIBUTE_PATH
+              value: "name || preferred_username"
+            # ── Security ──────────────────────────────────────────
+            - name: GF_USERS_ALLOW_SIGN_UP
+              value: "false"
+            - name: GF_USERS_AUTO_ASSIGN_ORG_ROLE
+              value: "Editor"
+            - name: GF_USERS_DEFAULT_THEME
+              value: "dark"
+            # ── OPTAVIM Branding ───────────────────────────────────
+            # GF_BRANDING_* requires Grafana Enterprise for some fields,
+            # but APP_TITLE / LOGIN_TITLE / LOGIN_SUBTITLE work in OSS.
+            - name: GF_BRANDING_APP_TITLE
+              value: "OPTAVIM"
+            - name: GF_BRANDING_LOGIN_TITLE
+              value: "OPTAVIM Observabilité"
+            - name: GF_BRANDING_LOGIN_SUBTITLE
+              value: "Optimisation · Vision · Ambition"
+            - name: GF_BRANDING_LOGIN_LOGO
+              value: "public/img/grafana_typelogo.svg"
+            - name: GF_BRANDING_LOGIN_BACKGROUND
+              value: "public/img/g8_login_dark.svg"
+            - name: GF_BRANDING_MENU_LOGO
+              value: "public/img/grafana_icon.svg"
+            - name: GF_NEWS_NEWS_FEED_ENABLED
+              value: "false"
+            # Disable the "Welcome to Grafana" home dashboard (overridden by opta-exec via API later)
+            - name: GF_DEFAULT_HOME_DASHBOARD_PATH
+              value: ""
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "200m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+            - name: dashboards-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+            # OPTAVIM dashboards via ConfigMap (not NFS PV, reload < 30s)
+            - name: dashboards-cm
+              mountPath: /var/lib/grafana/dashboards-cm
+            # Public assets overlay (logo + CSS injected by initContainer)
+            - name: public-overlay
+              mountPath: /usr/share/grafana/public
+            # readOnlyRootFilesystem: true -> writable /tmp required by Grafana
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 60
+            periodSeconds: 30
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pvc-grafana
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboards-provider
+          configMap:
+            name: grafana-dashboards-provider
+        - name: dashboards-cm
+          configMap:
+            name: grafana-dashboards-optavim
+            optional: true   # empty until the Keycloak OIDC client is created
+        - name: branding
+          configMap:
+            name: grafana-branding
+        - name: public-overlay
+          emptyDir:
+            # 500Mi: Grafana 11.1.3 /usr/share/grafana/public/ ~ 200Mi
+            # + 200Mi headroom for plugins / icons / fonts.
+            sizeLimit: 500Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 128Mi

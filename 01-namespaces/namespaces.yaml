@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: auth
+  labels:
+    project: optavim
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: databases
+  labels:
+    project: optavim
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: apps
+  labels:
+    project: optavim
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    project: optavim
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: security
+  labels:
+    project: optavim
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ingress
+  labels:
+    project: optavim
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-system
+  labels:
+    project: optavim

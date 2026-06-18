@@ -1,0 +1,144 @@
+##############################################################################
+# OPTAVIM: NetworkPolicy databases (defense-in-depth)
+# Namespace: databases
+#
+# Restricts access to the MariaDB Galera cluster (Phase 4):
+#   - INGRESS 3306  : only from ns apps / auth / identity / monitoring
+#   - INGRESS 9000  : MinIO from the databases ns itself (the backup Job)
+#   - INGRESS 9104  : metrics exporter scraping from ns monitoring
+#   - EGRESS DNS    : kube-system CoreDNS
+#   - EGRESS NFS    : 10.1.30.100:2049
+#   - EGRESS intra  : galera<->galera (wsrep 4567/4568/4444)
+#
+# Warning: do NOT apply before Phase 4. If Calico is misconfigured, it can break
+#   app access. Test first in `dryRun: true` mode on the Calico side.
+##############################################################################
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mariadb-galera-ingress
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: mariadb-galera
+  policyTypes: [Ingress]
+  ingress:
+    # 3306 MySQL: client connections from the apps
+    - from:
+        - namespaceSelector:
+            matchExpressions:
+              - key: kubernetes.io/metadata.name
+                operator: In
+                values: [apps, auth, identity]
+      ports:
+        - protocol: TCP
+          port: 3306
+    # 9104 metrics: Prometheus scrape
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9104
+    # Intra-cluster Galera wsrep
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: mariadb-galera
+      ports:
+        - protocol: TCP
+          port: 4567       # replication
+        - protocol: TCP
+          port: 4568       # IST
+        - protocol: TCP
+          port: 4444       # SST
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mariadb-galera-egress
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: mariadb-galera
+  policyTypes: [Egress]
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # NFS storage backend (10.1.30.100)
+    - to:
+        - ipBlock:
+            cidr: 10.1.30.0/24
+      ports:
+        - protocol: TCP
+          port: 2049
+        - protocol: TCP
+          port: 111
+    # Intra-Galera replication
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: mariadb-galera
+      ports:
+        - protocol: TCP
+          port: 4567
+        - protocol: TCP
+          port: 4568
+        - protocol: TCP
+          port: 4444
+        - protocol: TCP
+          port: 3306
+    # MinIO S3 (backup target)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - protocol: TCP
+          port: 9000
+
+---
+# MinIO: ingress backup Job + Phase 1 mysqldump upload
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: minio-ingress
+  namespace: databases
+  labels:
+    project: optavim
+spec:
+  podSelector:
+    matchLabels:
+      app: minio
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # Cluster MariaDB (Backup Job + mysqldump upload)
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: mariadb-galera
+        # Old galera StatefulSet for Phase 1 (will be removed in Phase 4)
+        - podSelector:
+            matchLabels:
+              app: galera
+      ports:
+        - protocol: TCP
+          port: 9000

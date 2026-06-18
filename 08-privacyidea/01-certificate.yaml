@@ -1,0 +1,27 @@
+# cert-manager Certificate for the mfa.optavim.corp self-service portal
+# Generates an 'optavim-wildcard-tls' secret in the identity namespace, signed by AD CS.
+# Same pattern as apps/, ingress/.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: optavim-wildcard
+  namespace: identity
+  labels:
+    app: privacyidea
+    project: optavim
+    phase: "9"
+spec:
+  secretName: optavim-wildcard-tls
+  commonName: "*.optavim.corp"
+  dnsNames:
+    - "*.optavim.corp"
+    - "optavim.corp"
+  duration: 8760h   # 1 year
+  renewBefore: 720h # 30 days before expiration
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    group: adcs.certmanager.csf.nokia.com
+    kind: ClusterAdcsIssuer
+    name: adcs-optavim

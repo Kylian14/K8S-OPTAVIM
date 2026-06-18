@@ -1,0 +1,157 @@
+##############################################################################
+# OPTAVIM Dolibarr 19 OIDC patch ConfigMap
+#
+# Replaces /var/www/html/core/login/functions_openid_connect.php via a subPath
+# mount (see the `oidc-patch` volumeMount in 02-deployment.yaml).
+#
+# Three fixes:
+#   1. is_object($x) && property_exists(...): avoids the PHP TypeError when
+#      $token_content / $userinfo_content are null (incident 2026-06-07).
+#   2. GETPOST('code', 'aZ09') replaced by preg_replace(...) that keeps the
+#      dashes and dots of the Keycloak OIDC code (UUID.UUID.UUID format).
+#   3. getURLContent(..., $localurl=1): allows auth.optavim.corp that the
+#      anti-SSRF check rejected because it resolves to a private IP (10.1.50.100,
+#      HAProxy). Incident 2026-06-08 ("Token request error 400" / "bad hostname IP").
+#
+# To regenerate this ConfigMap from the source PHP file:
+#   kubectl create configmap dolibarr-oidc-patch \
+#     --from-file=functions_openid_connect.php=./functions_openid_connect.php \
+#     -n apps --dry-run=client -o yaml > 04-oidc-patch-configmap.yaml
+##############################################################################
+# No hardcoded secret here: this ConfigMap contains PHP source
+# (functions_openid_connect.php). The `client_secret` references are code that reads a
+# constant stored in the DB ($conf->global->MAIN_AUTHENTICATION_OIDC_CLIENT_SECRET)
+# and the `client_secret` key of the request body, not an actual secret value.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dolibarr-oidc-patch
+  namespace: apps
+  labels:
+    app: dolibarr
+    project: optavim
+    component: oidc-patch
+data:
+  functions_openid_connect.php: |
+    <?php
+    /* Copyright (C) 2022 Jeritiana Ravelojaona <jeritiana.rav@smartone.ai>
+     *
+     * This program is free software; you can redistribute it and/or modify
+     * it under the terms of the GNU General Public License as published by
+     * the Free Software Foundation; either version 3 of the License, or
+     * (at your option) any later version.
+     *
+     * This program is distributed in the hope that it will be useful,
+     * but WITHOUT ANY WARRANTY; without even the implied warranty of
+     * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+     * GNU General Public License for more details.
+     */
+
+    include_once DOL_DOCUMENT_ROOT.'/core/lib/geturl.lib.php';
+
+    /**
+     * Check validity of user/password/entity (OPTAVIM patched version)
+     */
+    function check_user_password_openid_connect($usertotest, $passwordtotest, $entitytotest)
+    {
+    	global $db, $conf, $langs;
+
+    	$entity = $entitytotest;
+    	if (isModEnabled('multicompany') && getDolGlobalString('MULTICOMPANY_TRANSVERSE_MODE')) {
+    		$entity = 1;
+    	}
+
+    	$login = '';
+
+    	dol_syslog("functions_openid_connect::check_user_password_openid_connect usertotest=".$usertotest." passwordtotest=".preg_replace('/./', '*', $passwordtotest)." entitytotest=".$entitytotest);
+
+    	if (GETPOSTISSET('username')) {
+    		$_SESSION["dol_loginmesg"] = "Not an OpenID Connect flow";
+    		dol_syslog("functions_openid_connect::check_user_password_openid_connect not an OIDC flow");
+    	} elseif (GETPOSTISSET('code')) {
+    		// OPTAVIM PATCH: GETPOST('code', 'aZ09') strips dashes (-) and dots (.) which
+    		// mangles the Keycloak OIDC code (UUID.UUID.UUID format).
+    		// We extract directly from $_GET with a regex preserving those characters.
+    		$auth_code = isset($_GET['code']) ? preg_replace('/[^a-zA-Z0-9._-]/', '', $_GET['code']) : '';
+    		dol_syslog("functions_openid_connect::check_user_password_openid_connect code=".$auth_code);
+
+    		$auth_param = [
+    			'grant_type'    => 'authorization_code',
+    			'client_id'     => $conf->global->MAIN_AUTHENTICATION_OIDC_CLIENT_ID,
+    			'client_secret' => $conf->global->MAIN_AUTHENTICATION_OIDC_CLIENT_SECRET,
+    			'code'          => $auth_code,
+    			'redirect_uri'  => $conf->global->MAIN_AUTHENTICATION_OIDC_REDIRECT_URL
+    		];
+
+    		// OPTAVIM PATCH: 7th param $localurl=1 to allow auth.optavim.corp
+    		// which resolves to a private IP (getURLContent anti-SSRF check blocks it otherwise).
+    		$token_response = getURLContent(
+    			$conf->global->MAIN_AUTHENTICATION_OIDC_TOKEN_URL,
+    			'POST',
+    			http_build_query($auth_param),
+    			1,                       // followlocation
+    			array(),                 // addheaders
+    			array('http', 'https'),  // allowedschemes
+    			1                        // localurl=1 (allow private IP)
+    		);
+    		$token_content = json_decode($token_response['content']);
+    		dol_syslog("functions_openid_connect::check_user_password_openid_connect /token=".print_r($token_response, true), LOG_DEBUG);
+
+    		if (is_object($token_content) && property_exists($token_content, "access_token")) {
+    			$userinfo_headers = array('Authorization: Bearer '.$token_content->access_token);
+    			// OPTAVIM PATCH: 7th param $localurl=1 (same as token)
+    			$userinfo_response = getURLContent(
+    				$conf->global->MAIN_AUTHENTICATION_OIDC_USERINFO_URL,
+    				'GET',
+    				'',
+    				1,
+    				$userinfo_headers,
+    				array('http', 'https'),
+    				1
+    			);
+    			$userinfo_content = json_decode($userinfo_response['content']);
+
+    			dol_syslog("functions_openid_connect::check_user_password_openid_connect /userinfo=".print_r($userinfo_response, true), LOG_DEBUG);
+
+    			$login_claim = 'email';
+    			if (getDolGlobalString('MAIN_AUTHENTICATION_OIDC_LOGIN_CLAIM')) {
+    				$login_claim = $conf->global->MAIN_AUTHENTICATION_OIDC_LOGIN_CLAIM;
+    			}
+
+    			if (is_object($userinfo_content) && property_exists($userinfo_content, $login_claim)) {
+    				$sql = 'SELECT login, entity, datestartvalidity, dateendvalidity';
+    				$sql .= ' FROM '.MAIN_DB_PREFIX.'user';
+    				$sql .= " WHERE login = '".$db->escape($userinfo_content->$login_claim)."'";
+    				$sql .= ' AND entity IN (0,'.(array_key_exists('dol_entity', $_SESSION) ? ((int) $_SESSION["dol_entity"]) : 1).')';
+
+    				$resql = $db->query($sql);
+    				if ($resql) {
+    					$obj = $db->fetch_object($resql);
+    					if ($obj) {
+    						$login = $obj->login;
+    					}
+    				}
+    			} elseif (is_object($userinfo_content) && property_exists($userinfo_content, 'error')) {
+    				$_SESSION["dol_loginmesg"] = "Error in OAuth 2.0 flow (".$userinfo_content->error_description.")";
+    			} elseif ($userinfo_response['http_code'] == 200) {
+    				$_SESSION["dol_loginmesg"] = "OpenID Connect claim not found: ".$login_claim;
+    			} elseif ($userinfo_response['curl_error_no']) {
+    				$_SESSION["dol_loginmesg"] = "Network error: ".$userinfo_response['curl_error_msg']." (".$userinfo_response['curl_error_no'].")";
+    			} else {
+    				$_SESSION["dol_loginmesg"] = "Userinfo request error (".$userinfo_response['http_code'].")";
+    			}
+    		} elseif (is_object($token_content) && property_exists($token_content, 'error')) {
+    			$_SESSION["dol_loginmesg"] = "Error in OAuth 2.0 flow (".$token_content->error_description.")";
+    		} elseif ($token_response['curl_error_no']) {
+    			$_SESSION["dol_loginmesg"] = "Network error: ".$token_response['curl_error_msg']." (".$token_response['curl_error_no'].")";
+    		} else {
+    			$_SESSION["dol_loginmesg"] = "Token request error (".$token_response['http_code'].")";
+    		}
+    	} else {
+    		$_SESSION["dol_loginmesg"] = "Error in OAuth 2.0 flow (no code received)";
+    	}
+
+    	dol_syslog("functions_openid_connect::check_user_password_openid_connect END");
+
+    	return !empty($login) ? $login : false;
+    }

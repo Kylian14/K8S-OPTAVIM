@@ -1,0 +1,119 @@
+# FreeRADIUS pod that calls privacyIDEA /validate/check via rlm_rest
+# 1 replica, NodePort UDP 31812 Service on the 3 workers
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privacyidea-radius
+  namespace: identity
+  labels:
+    app: privacyidea-radius
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: privacyidea-radius
+  template:
+    metadata:
+      labels:
+        app: privacyidea-radius
+      annotations:
+        # Custom optavim/freeradius-pi image: the inline command rewrites the
+        # FreeRADIUS config tree under /etc/freeradius/3.0, copies the validate
+        # script into /usr/local/bin, then runs `freeradius -X`. The runtime user
+        # is not confirmed for this image, so runAsNonRoot is not forced and the
+        # root filesystem is left writable (the entrypoint mutates the config
+        # tree + drops a script on the rootfs). The container still drops ALL caps
+        # + blocks privilege escalation + RuntimeDefault seccomp. Workload is
+        # isolated by the 'identity' namespace; only UDP/1812 is exposed.
+        ignore-check.kube-linter.io/run-as-non-root: "custom optavim/freeradius-pi image runtime uid unconfirmed; entrypoint rewrites config + freeradius -X; caps dropped + no-priv-esc + RuntimeDefault seccomp applied; isolated by namespace"
+        ignore-check.kube-linter.io/no-read-only-root-fs: "freeradius-pi entrypoint rewrites /etc/freeradius/3.0 + writes /usr/local/bin/pi-validate.sh on the rootfs at boot; read-only rootfs would crash-loop"
+    spec:
+      # Pod securityContext: RuntimeDefault seccomp at pod level so the
+      # container inherits the same seccomp baseline.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: freeradius
+          image: docker.io/optavim/freeradius-pi:2.0   # ubuntu:22.04 + freeradius 3.0 + curl (ctr import local)
+          imagePullPolicy: Never
+          # Container securityContext: baseline for a custom image whose runtime
+          # user we haven't confirmed. Drops ALL caps, blocks privilege
+          # escalation, RuntimeDefault seccomp. runAsNonRoot / readOnlyRootFilesystem
+          # left off on purpose (see pod-template annotations above).
+          # trivy:ignore:KSV-0014 root filesystem left writable: entrypoint rewrites /etc/freeradius/3.0 and drops pi-validate.sh on the rootfs at boot
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              FR=/etc/freeradius/3.0
+              # Substitute the shared secret in clients.conf
+              sed "s|\${RADIUS_SHARED_SECRET}|${RADIUS_SHARED_SECRET}|g" /tmp/cm/clients.conf > $FR/clients.conf
+              # Override modules + sites
+              mkdir -p $FR/mods-enabled $FR/sites-enabled
+              cp /tmp/cm/exec-module $FR/mods-enabled/privacyidea
+              # We do plain PAP via rlm_exec, so we strip all the complex modules
+              for m in eap mschap ntlm_auth dhcp digest unix expiration logintime totp ippool counter rest; do
+                rm -f $FR/mods-enabled/$m
+              done
+              # Empty sites-enabled and put only our default there
+              rm -f $FR/sites-enabled/*
+              cp /tmp/cm/default-site $FR/sites-enabled/default
+              # Install the validation script + curl
+              cp /tmp/cm/pi-validate.sh /usr/local/bin/pi-validate.sh
+              chmod +x /usr/local/bin/pi-validate.sh
+              # curl is already in the optavim/freeradius-pi:1.0 image
+              # Start in debug mode (verbose logs)
+              exec freeradius -X -d $FR
+          env:
+            - name: RADIUS_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: privacyidea-secret
+                  key: PI_RADIUS_SHARED_SECRET
+          ports:
+            - containerPort: 1812
+              name: radius-auth
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /tmp/cm
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          # No HTTP/TCP probe (RADIUS is UDP). The pod is restarted if freeradius -X crashes.
+      volumes:
+        - name: config
+          configMap:
+            name: privacyidea-radius-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: privacyidea-radius
+  namespace: identity
+  labels:
+    app: privacyidea-radius
+spec:
+  type: NodePort
+  selector:
+    app: privacyidea-radius
+  ports:
+    - name: radius-auth
+      protocol: UDP
+      port: 1812
+      targetPort: 1812
+      nodePort: 31812

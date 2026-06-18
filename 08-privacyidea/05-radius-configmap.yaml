@@ -1,0 +1,121 @@
+# FreeRADIUS ConfigMap: minimal config that validates Access-Requests via the privacyIDEA REST API
+# 3 overridden files:
+#   - clients.conf            : allowed NAS (pfSense, bastion, K8s pod CIDR)
+#   - mods-enabled/rest       : REST module pointing at privacyIDEA /validate/check
+#   - sites-enabled/default   : virtual server that calls rest for authorize+authenticate
+---
+# trivy:ignore:KSV-0109 the `secret = "${RADIUS_SHARED_SECRET}"` lines are a literal template placeholder, NOT a stored secret: the init command sed-substitutes it from the RADIUS_SHARED_SECRET env (sourced from the privacyidea-secret Secret) at boot
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: privacyidea-radius-config
+  namespace: identity
+data:
+  clients.conf: |
+    # Allowed NAS clients (PAP with concatenated pwd_AD+OTP)
+
+    # Loopback (internal radtest tests from the pod itself)
+    client localhost {
+      ipaddr = 127.0.0.1
+      secret = "${RADIUS_SHARED_SECRET}"
+      shortname = pod-localhost
+      require_message_authenticator = no
+    }
+
+    # pfSense OpenVPN (source via HAProxy VIP or direct)
+    client pfsense-lan {
+      ipaddr = 10.1.10.0/24
+      secret = "${RADIUS_SHARED_SECRET}"
+      shortname = pfsense-openvpn
+      nas_type = other
+      require_message_authenticator = no
+    }
+    client pfsense-haproxy {
+      ipaddr = 10.1.50.0/24
+      secret = "${RADIUS_SHARED_SECRET}"
+      shortname = pfsense-via-haproxy
+      nas_type = other
+      require_message_authenticator = no
+    }
+    # K8s Pod CIDR (self-test from any pod)
+    client k8s-pods {
+      ipaddr = 10.200.0.0/16
+      secret = "${RADIUS_SHARED_SECRET}"
+      shortname = k8s-pods
+      require_message_authenticator = no
+    }
+    # K8s Service CIDR (kube-proxy NAT)
+    client k8s-services {
+      ipaddr = 10.201.0.0/16
+      secret = "${RADIUS_SHARED_SECRET}"
+      shortname = k8s-services
+      require_message_authenticator = no
+    }
+    # Workers nodes (NodePort path)
+    client k8s-workers {
+      ipaddr = 10.1.40.0/24
+      secret = "${RADIUS_SHARED_SECRET}"
+      shortname = k8s-workers
+      require_message_authenticator = no
+    }
+
+  pi-validate.sh: |
+    #!/bin/bash
+    # Validate auth via privacyIDEA API.
+    # Called by rlm_exec with: pi-validate.sh "<User-Name>" "<User-Password>"
+    # Exit 0 = Access-Accept, Exit 1 = Access-Reject
+    USER="$1"
+    PASS="$2"
+    if [ -z "$USER" ] || [ -z "$PASS" ]; then
+      echo "ERR empty user/pass" >&2
+      exit 1
+    fi
+    RESP=$(curl -sk -m 10 -X POST http://privacyidea-web.identity.svc.cluster.local:8080/validate/check \
+      --data-urlencode "user=$USER" \
+      --data-urlencode "pass=$PASS")
+    # The privacyIDEA JSON: { "result": { "value": true|false, "authentication": "ACCEPT"|"REJECT" } }
+    echo "$RESP" | grep -qE '"value"[[:space:]]*:[[:space:]]*true' && exit 0
+    exit 1
+
+  exec-module: |
+    # mods-enabled/exec_privacyidea: calls pi-validate.sh "user" "pass"
+    exec privacyidea {
+      wait = yes
+      shell_escape = yes
+      output = none
+      timeout = 12
+      program = "/usr/local/bin/pi-validate.sh '%{User-Name}' '%{User-Password}'"
+    }
+
+  default-site: |
+    # sites-enabled/default: PAP flow, delegates to pi-validate.sh
+    server default {
+      listen {
+        type = auth
+        ipaddr = *
+        port = 1812
+      }
+
+      authorize {
+        # Force auth-type to go through authenticate{}
+        update control {
+          Auth-Type := privacyidea
+        }
+      }
+
+      authenticate {
+        Auth-Type privacyidea {
+          privacyidea
+          if (ok) {
+            ok
+          }
+          else {
+            reject
+          }
+        }
+      }
+
+      post-auth {
+        Post-Auth-Type REJECT { }
+      }
+    }

@@ -1,0 +1,186 @@
+/* ===========================================================================
+ * OPTAVIM — Grafana custom theme (Aurora palette)
+ * Injected via initContainer into /usr/share/grafana/public/css/optavim.css
+ * Loaded via <link> tag injected into index.html (patched by initContainer)
+ *
+ * Coherence with Keycloak login theme (07-keycloak/themes/optavim/) :
+ *   - Palette : navy / blue / cyan / iris
+ *   - Fonts   : Space Grotesk (display), Manrope (body), JetBrains Mono (metrics)
+ *   - Slogan  : "Optimisation · Vision · Ambition"
+ * ========================================================================= */
+
+/* ---- Typography (Google Fonts CDN) ------------------------------------- */
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* OPTAVIM Aurora palette */
+  --opta-navy-950: #070B16;
+  --opta-navy-900: #0B1120;
+  --opta-navy-850: #0F1729;
+  --opta-navy-800: #1E293B;
+  --opta-blue-500: #3B82F6;
+  --opta-cyan-400: #22D3EE;
+  --opta-iris-500: #6366F1;
+  --opta-text-strong: #F8FAFC;
+  --opta-text-muted: rgba(226, 232, 240, 0.7);
+  --opta-border: rgba(255, 255, 255, 0.08);
+  --opta-grad-vision: linear-gradient(135deg, #3B82F6 0%, #22D3EE 100%);
+}
+
+/* ---- Override Grafana CSS vars (dark theme) ---------------------------- */
+.theme-dark {
+  --primary-color: var(--opta-blue-500);
+  --secondary-color: var(--opta-cyan-400);
+  --brand-color: var(--opta-blue-500);
+}
+
+/* ---- Body + fonts ------------------------------------------------------ */
+body,
+.theme-dark {
+  font-family: 'Manrope', system-ui, -apple-system, sans-serif !important;
+  background: var(--opta-navy-900) !important;
+  color: var(--opta-text-strong);
+}
+
+h1, h2, h3, h4, h5, h6,
+[class*="page-header"],
+[class*="dashboard-title"] {
+  font-family: 'Space Grotesk', 'Manrope', sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em;
+}
+
+code, pre, kbd,
+[class*="metric-value"],
+[class*="stat-panel-value"] {
+  font-family: 'JetBrains Mono', 'SFMono-Regular', monospace !important;
+}
+
+/* ---- Sidebar ----------------------------------------------------------- */
+[data-testid="data-testid Nav menu"],
+nav[aria-label="Main menu"],
+.sidemenu,
+.scrollbar-view > nav {
+  background: var(--opta-navy-950) !important;
+  border-right: 1px solid var(--opta-border) !important;
+}
+
+/* ---- Page background --------------------------------------------------- */
+.main-view,
+[class*="page-container"],
+[class*="dashboard-container"] {
+  background: var(--opta-navy-900) !important;
+}
+
+/* ---- Panels ------------------------------------------------------------ */
+.panel-container,
+[class*="panel-content"] {
+  background: var(--opta-navy-850) !important;
+  border: 1px solid var(--opta-border) !important;
+  border-radius: 10px !important;
+}
+
+.panel-title,
+[class*="panel-title"] {
+  font-family: 'Space Grotesk', sans-serif !important;
+  font-weight: 600 !important;
+  color: var(--opta-text-strong) !important;
+}
+
+/* ---- Buttons primary --------------------------------------------------- */
+button[class*="primary"],
+.btn-primary,
+[data-testid*="primary"] {
+  background: var(--opta-grad-vision) !important;
+  border: none !important;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25) !important;
+  font-family: 'Manrope', sans-serif !important;
+  font-weight: 600 !important;
+}
+
+button[class*="primary"]:hover,
+.btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(59, 130, 246, 0.35) !important;
+}
+
+/* ---- Login page -------------------------------------------------------- */
+[class*="login-content"],
+.login-content,
+.login-form-input {
+  background: var(--opta-navy-850) !important;
+}
+
+.login-content::before {
+  /* Aurora gradient overlay derrière le form */
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(90% 80% at 18% 12%, rgba(29, 78, 216, 0.6) 0%, transparent 55%),
+    radial-gradient(80% 70% at 88% 22%, rgba(6, 182, 212, 0.5) 0%, transparent 50%),
+    radial-gradient(70% 70% at 60% 100%, rgba(49, 46, 129, 0.5) 0%, transparent 60%),
+    linear-gradient(160deg, #0B1120, #070B16);
+  z-index: -1;
+}
+
+/* Slogan footer login */
+.login-content::after {
+  content: "OPTIMISATION  ·  VISION  ·  AMBITION";
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3em;
+  color: rgba(148, 163, 184, 0.55);
+  z-index: 100;
+  pointer-events: none;
+}
+
+/* ---- Inputs ------------------------------------------------------------ */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="search"],
+textarea,
+select,
+[class*="input-wrapper"] input {
+  background: var(--opta-navy-900) !important;
+  border: 1px solid var(--opta-border) !important;
+  border-radius: 8px !important;
+  color: var(--opta-text-strong) !important;
+  font-family: 'Manrope', sans-serif !important;
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--opta-blue-500) !important;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+  outline: none !important;
+}
+
+/* ---- Scrollbars -------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--opta-navy-950);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--opta-navy-800);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--opta-blue-500);
+}
+
+/* ---- Footer hide Grafana version --------------------------------------- */
+.footer-item-news,
+[class*="footer"] [class*="news"] {
+  display: none !important;
+}

@@ -1,0 +1,206 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wazuh-manager
+  namespace: security
+  labels:
+    app: wazuh-manager
+    project: optavim
+spec:
+  # NodePort so the Wazuh agents (off-cluster: opt2 DCs, workstations via VPN)
+  # reach the manager. Path: agent -> HAProxy VIP 10.1.50.100:1514/1515
+  # -> workers opt4:31514/31515. 1514 is TCP (the manager listens
+  # <remote><protocol>tcp</protocol>; the old UDP was a bug).
+  type: NodePort
+  selector:
+    app: wazuh-manager
+  ports:
+    - name: agents
+      port: 1514
+      protocol: TCP
+      targetPort: 1514
+      nodePort: 31514
+    - name: enrollment
+      port: 1515
+      protocol: TCP
+      targetPort: 1515
+      nodePort: 31515
+    - name: api
+      port: 55000
+      targetPort: 55000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wazuh-manager
+  namespace: security
+  labels:
+    app: wazuh-manager
+    project: optavim
+    phase: "7"
+spec:
+  replicas: 1
+  serviceName: wazuh-manager
+  selector:
+    matchLabels:
+      app: wazuh-manager
+  template:
+    metadata:
+      labels:
+        app: wazuh-manager
+        project: optavim
+      annotations:
+        # The official wazuh-manager image starts as root (wazuh-control launches
+        # its ossec daemons then drops privileges to wazuh uid=999 via
+        # setuid). runAsNonRoot + allowPrivilegeEscalation:false would break this
+        # mechanism. Isolated by namespace + NetworkPolicy; exposes only the
+        # agents/enrollment/API ports. seccompProfile RuntimeDefault applied.
+        ignore-check.kube-linter.io/run-as-non-root: "official wazuh-manager image starts root then drops to wazuh uid 999 via setuid"
+        ignore-check.kube-linter.io/no-read-only-root-fs: "wazuh-manager writes throughout /var/ossec (bin, ruleset, framework) outside the PVC; read-only rootfs would break the manager"
+    spec:
+      # Pod-level securityContext (KSV-0118): RuntimeDefault seccomp baseline.
+      # runAsNonRoot left unset on purpose: wazuh-manager starts as root then
+      # drops to uid 999 via setuid (see KSV-0012/KSV-0103 ignores below).
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      # initContainer: seed the PV with the structure Wazuh expects
+      # (queue/, logs/, etc/, var/) FROM the image, otherwise the main container
+      # would start with empty folders and not know where to write.
+      # Idempotent: copies only if the PV is empty.
+      initContainers:
+        - name: seed-pv
+          image: wazuh/wazuh-manager:4.8.2
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              for sub in queue logs var etc; do
+                if [ ! "$(ls -A /pv/$sub 2>/dev/null)" ]; then
+                  echo "Seeding /pv/$sub from image /var/ossec/$sub …"
+                  mkdir -p /pv/$sub
+                  cp -a /var/ossec/$sub/. /pv/$sub/ 2>/dev/null || true
+                else
+                  echo "/pv/$sub already populated ($(ls /pv/$sub | wc -l) entries)"
+                fi
+              done
+              # The wazuh user in the Wazuh 4.8.2 image has uid=999, gid=999.
+              # Without this chown, the API (wazuh-apid) that drops privileges to
+              # wazuh fails to write its PID in /var/ossec/var/run (NFS created
+              # as uid=1000 by an earlier version), API Offline on the dashboard.
+              WAZUH_UID=$(awk -F: '/^wazuh:/{print $3":"$4}' /etc/passwd)
+              echo "Chowning /pv to $WAZUH_UID (wazuh user in image)"
+              chown -R "$WAZUH_UID" /pv 2>/dev/null || true
+          securityContext:
+            # seed + chown the PV to wazuh uid (999): needs root, not privileged.
+            runAsNonRoot: false
+            runAsUser: 0
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits:   {cpu: "300m", memory: "256Mi"}
+          volumeMounts:
+            - name: data
+              mountPath: /pv
+      containers:
+        - name: wazuh-manager
+          image: wazuh/wazuh-manager:4.8.2
+          # trivy:ignore:KSV-0012 official wazuh-manager image starts root then drops to wazuh uid 999 via setuid; runAsNonRoot would break the ossec supervisor
+          # trivy:ignore:KSV-0014 wazuh-manager writes throughout /var/ossec (bin, ruleset, framework) outside the PVC; read-only rootfs would break the manager
+          # trivy:ignore:KSV-0103 the manager changes uid via setuid at runtime; allowPrivilegeEscalation:false would block this privilege drop
+          securityContext:
+            # No runAsNonRoot / readOnlyRootFilesystem / no-priv-esc: see ignores above.
+            # Safe hardening: drop all unnecessary capabilities + seccomp.
+            capabilities:
+              drop: ["ALL"]
+              # SETUID/SETGID required: the manager launches its daemons under wazuh (999) from root.
+              add: ["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER", "KILL"]
+            seccompProfile:
+              type: RuntimeDefault
+          env:
+            - name: INDEXER_URL
+              value: "https://wazuh-indexer.security.svc.cluster.local:9200"
+            - name: INDEXER_USERNAME
+              value: "admin"
+            - name: INDEXER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-secret
+                  key: INDEXER_PASSWORD
+            - name: FILEBEAT_SSL_VERIFICATION_MODE
+              value: "none"
+            - name: SSL_CERTIFICATE_AUTHORITIES
+              value: "/etc/ssl/root-ca.pem"
+            - name: SSL_CERTIFICATE
+              value: "/etc/ssl/filebeat.pem"
+            - name: SSL_KEY
+              value: "/etc/ssl/filebeat.key"
+            - name: API_USERNAME
+              value: "wazuh-wui"
+            - name: API_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: wazuh-secret
+                  key: API_PASSWORD
+          ports:
+            - name: agents
+              containerPort: 1514
+              protocol: UDP
+            - name: enrollment
+              containerPort: 1515
+            - name: api
+              containerPort: 55000
+          resources:
+            requests:
+              cpu: "300m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          # ephemeral limits to force eviction BEFORE node saturation
+          # (any growing data must go on the PV below)
+          volumeMounts:
+            # PV mounted on the 4 subfolders that grow on NFS.
+            # /var/ossec/queue was the culprit (6-9 Gi in ephemeral).
+            # The rest (/bin, /lib, /framework, /ruleset) stays ephemeral
+            # but stable (~730 Mi, identical on each boot from the image).
+            - name: data
+              mountPath: /var/ossec/queue
+              subPath: queue
+            - name: data
+              mountPath: /var/ossec/logs
+              subPath: logs
+            - name: data
+              mountPath: /var/ossec/var
+              subPath: var
+            - name: data
+              mountPath: /var/ossec/etc
+              subPath: etc
+            # Certs
+            - name: certs
+              mountPath: /etc/ssl/filebeat.pem
+              subPath: wazuh-manager.pem
+              readOnly: true
+            - name: certs
+              mountPath: /etc/ssl/filebeat.key
+              subPath: wazuh-manager-key.pem
+              readOnly: true
+            - name: certs
+              mountPath: /etc/ssl/root-ca.pem
+              subPath: root-ca.pem
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pvc-wazuh-manager
+        - name: certs
+          secret:
+            secretName: wazuh-certs-manager
+            defaultMode: 0400

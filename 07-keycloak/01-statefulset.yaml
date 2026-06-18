@@ -1,0 +1,293 @@
+---
+# Headless service for inter-pod discovery (Infinispan clustering via JGroups/DNS)
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-headless
+  namespace: auth
+spec:
+  clusterIP: None
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: https
+      port: 8443
+      targetPort: 8443
+---
+# ClusterIP service consumed by Traefik
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: auth
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# Keycloak StatefulSet, 2 replicas in HA mode
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak
+  namespace: auth
+  annotations:
+    # Keycloak writes to /opt/keycloak/data + /tmp (implicit Quarkus rebuild
+    # triggered by the restrict-client-auth provider jar) -> writable rootfs
+    # required. Mitigated: runAsNonRoot 1000, drop ALL caps, no-priv-esc,
+    # seccomp RuntimeDefault, isolated auth namespace.
+    ignore-check.kube-linter.io/no-read-only-root-fs: "keycloak writes /opt/keycloak/data + /tmp (Quarkus rebuild); rootfs must stay writable, mitigated by runAsNonRoot 1000 + drop ALL caps + no-priv-esc + namespace isolation"
+spec:
+  replicas: 2
+  serviceName: keycloak-headless
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+        project: optavim
+      annotations:
+        # Prometheus scrape via annotation-based discovery
+        # Keycloak 24 exposes /metrics on the main HTTP port (8080)
+        # when KC_METRICS_ENABLED=true. No separate management port
+        # before Keycloak 25. Intra-cluster scraping only (the Traefik
+        # Ingress does not route /metrics to the outside).
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Pod-level securityContext: non-root uid/gid 1000 (Keycloak runs as
+      # uid 1000 in the official image). fsGroup 1000 so the shared-cacerts
+      # emptyDir is readable by both containers.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Anti-affinity: one pod per node
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: keycloak
+              topologyKey: kubernetes.io/hostname
+      # The Keycloak 24 truststore SPI does not propagate the CA to the JVM for
+      # LDAP connections. We merge the standard cacerts with our AD root CA
+      # into a shared volume, then point the JVM at it.
+      # trivy:ignore:KSV-0020 init merge-cacerts inherits uid 1000 (pod securityContext) to align the emptyDir ownership with the Keycloak container; non-root guaranteed
+      # trivy:ignore:KSV-0021 init merge-cacerts inherits gid 1000 (pod securityContext); non-root guaranteed
+      initContainers:
+        - name: merge-cacerts
+          image: eclipse-temurin:17-jdk
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              # eclipse-temurin:17: cacerts is inside the JDK itself
+              cp /opt/java/openjdk/lib/security/cacerts /shared/cacerts
+              chmod 644 /shared/cacerts
+              keytool -importcert -noprompt \
+                -alias optavim-ad-root \
+                -file /ca/ca.pem \
+                -keystore /shared/cacerts \
+                -storepass changeit
+              echo "=== Certs present ==="
+              keytool -list -keystore /shared/cacerts -storepass changeit | grep -i optavim || echo "(no optavim match)"
+          # Container baseline + read-only rootfs: all writes
+          # target the /shared emptyDir (merged cacerts), no writes
+          # to the rootfs -> readOnlyRootFilesystem safe here.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests: {cpu: "50m", memory: "64Mi"}
+            limits:   {cpu: "200m", memory: "128Mi"}
+          volumeMounts:
+            - name: keycloak-truststore
+              mountPath: /ca
+              readOnly: true
+            - name: shared-cacerts
+              mountPath: /shared
+      # Accepted hardening exceptions (justified at the keycloak container level below):
+      #   KSV-0125 quay.io/keycloak = official Keycloak registry (pinned tag 24.0.3)
+      #   KSV-0014 Keycloak writes /opt/keycloak/data + /tmp (Quarkus rebuild) -> writable rootfs required
+      #   KSV-0020/0021 real uid/gid of the official image = 1000 (not >10000), non-root guaranteed by runAsNonRoot
+      # trivy:ignore:KSV-0125
+      # trivy:ignore:KSV-0014
+      # trivy:ignore:KSV-0020
+      # trivy:ignore:KSV-0021
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:24.0.3
+          # --truststore-paths passed via CLI to avoid the build-time cache
+          # that pointed at an old truststore.jks.
+          args:
+            - "start"
+            - "--truststore-paths=/opt/keycloak-truststore/ca.pem"
+          env:
+            # ── Admin ──────────────────────────────────────────────
+            - name: KEYCLOAK_ADMIN
+              value: "admin"
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-secret
+                  key: KEYCLOAK_ADMIN_PASSWORD
+
+            # ── Galera database ────────────────────────────────────
+            - name: KC_DB
+              value: "mariadb"
+            - name: KC_DB_URL
+              value: "jdbc:mariadb://galera.databases.svc.cluster.local:3306/keycloak_db"
+            - name: KC_DB_USERNAME
+              value: "keycloak"
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-secret
+                  key: KC_DB_PASSWORD
+
+            # ── TLS & proxy ────────────────────────────────────────
+            - name: KC_PROXY
+              value: "edge"
+            - name: KC_HOSTNAME
+              value: "auth.optavim.corp"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_HTTP_ENABLED
+              value: "true"
+
+            # ── Infinispan clustering (discovery via headless DNS) ──
+            - name: KC_CACHE
+              value: "ispn"
+            - name: KC_CACHE_STACK
+              value: "kubernetes"
+            - name: jgroups.dns.query
+              value: "keycloak-headless.auth.svc.cluster.local"
+            - name: KC_TRANSACTION_XA_ENABLED
+              value: "false"
+
+            # ── LDAPS to AD ───────────────────────────────────────
+            # For LDAPS, Keycloak uses the old "truststore SPI" which
+            # requires a JKS/PKCS12 file (not PEM). `--truststore-paths`
+            # (CLI args) covers server-side TLS, not the LDAP client.
+            # The 3 KC_SPI_TRUSTSTORE_FILE_* configure the truststore SPI.
+            - name: KC_SPI_TRUSTSTORE_FILE_FILE
+              value: "/opt/keycloak-truststore/truststore.jks"
+            - name: KC_SPI_TRUSTSTORE_FILE_PASSWORD
+              value: "changeit"
+            - name: KC_SPI_TRUSTSTORE_FILE_HOSTNAME_VERIFICATION_POLICY
+              value: "ANY"
+            - name: KC_HOSTNAME_VERIFICATION_POLICY
+              value: "ANY"
+            - name: KC_SPI_CONNECTIONS_LDAP_DEFAULT_USE_TRUSTSTORE_SPI
+              value: "ldapsOnly"
+
+            # ── Logging ────────────────────────────────────────────
+            - name: KC_LOG_LEVEL
+              value: "INFO"
+
+            # ── Metrics + health (Quarkus micrometer) ─────────────
+            # KC_METRICS_ENABLED=true -> /metrics on HTTP 8080
+            # KC_HEALTH_ENABLED=true  -> /health/ready + /health/live
+            - name: KC_METRICS_ENABLED
+              value: "true"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+
+            # ── Global JVM truststore (merged cacerts + AD root CA) ──
+            - name: JAVA_OPTS_APPEND
+              value: "-Djavax.net.ssl.trustStore=/opt/java-cacerts/cacerts -Djavax.net.ssl.trustStorePassword=changeit"
+
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: https
+              containerPort: 8443
+
+          # Container baseline. runAsNonRoot/uid 1000 inherited from the pod-level
+          # securityContext. readOnlyRootFilesystem NOT enabled: Keycloak writes
+          # to /opt/keycloak/data + /tmp (Quarkus rebuild of the provider jar);
+          # forcing it read-only would break the boot (KSV-0014 exception
+          # declared at the containers block above).
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+
+          volumeMounts:
+            - name: keycloak-truststore
+              mountPath: /opt/keycloak-truststore
+              readOnly: true
+            - name: shared-cacerts
+              mountPath: /opt/java-cacerts
+              readOnly: true
+            # sventorben/keycloak-restrict-client-auth extension v25.0.0
+            # (KC 24.0.x compatible): RBAC gate per OIDC client via the
+            # `restricted-access` role (or composite to GRP_<App> + domain Admins).
+            # The jar triggers an implicit Quarkus rebuild at startup (+20-30s).
+            - name: keycloak-providers
+              mountPath: /opt/keycloak/providers/restrict-client-auth.jar
+              subPath: restrict-client-auth.jar
+              readOnly: true
+
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "768Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1536Mi"
+
+          # Keycloak 24.0.3: the /health/* endpoints require
+          # --features=health (not enabled here), so we use /realms/master
+          # which returns 200 as soon as the master realm is loaded.
+          # The Quarkus boot takes 35-105 s, hence the long startupProbe
+          # (30 x 10 s = 5 min tolerance).
+          startupProbe:
+            httpGet:
+              path: /realms/master
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 30
+
+          readinessProbe:
+            httpGet:
+              path: /realms/master
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /realms/master
+              port: 8080
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: keycloak-truststore
+          secret:
+            secretName: keycloak-truststore
+        - name: shared-cacerts
+          emptyDir: {}
+        - name: keycloak-providers
+          configMap:
+            name: keycloak-providers

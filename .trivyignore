@@ -1,0 +1,39 @@
+# .trivyignore: exceptions for `trivy config .`, with the reason for each.
+#
+# We can't fix these without breaking the workloads. Each one is explained
+# below and kept contained by namespace + NetworkPolicy (and PVCs where the
+# workload is stateful). Trivy reads the check IDs listed here, one per line.
+
+# Traefik needs to read the TLS certificate secrets (get/list/watch only).
+KSV-0041
+
+# Stateful LAMP and DB workloads write to their root filesystem (apache web
+# root, Galera SST/recovery, OpenSearch config/logs, Keycloak data), so
+# readOnlyRootFilesystem would break them. The data lives on PVCs, behind a
+# namespace and a NetworkPolicy.
+KSV-0014
+
+# blackbox-exporter needs NET_RAW to send ICMP probes.
+KSV-0119
+
+# node-exporter reads node metrics, so it needs the host network, host PID,
+# host port and read-only host root mounts.
+KSV-0009
+KSV-0010
+KSV-0024
+KSV-0121
+
+# Prometheus needs nodes/proxy to scrape kubelet and cAdvisor.
+KSV-0047
+
+# Wazuh indexer (OpenSearch) needs a privileged init container to set
+# vm.max_map_count=262144.
+KSV-0017
+
+# The LDAP-sync CronJobs run kubectl exec into the app pod to call the app CLI
+# (an import that is safe to run again).
+KSV-0053
+
+# The "secret" in the privacyIDEA radius config and the Dolibarr OIDC PHP is a
+# template variable / source code, not a stored credential.
+KSV-0109

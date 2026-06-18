@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- OPTAVIM horizontal logo — Grafana login + sidebar typelogo. 240x40 viewBox. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="40" viewBox="0 0 240 40">
+  <defs>
+    <linearGradient id="vision-h" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+    <mask id="aperture-h">
+      <!-- Aperture scaled to 36x36 within 40px box (margin 2px) -->
+      <path d="M36,18 L27.36,3.66 L10.64,3.66 L2,18 L10.64,32.34 L27.36,32.34 Z" fill="#fff"/>
+      <path d="M24.49,15.12 L20,12.24 L15.51,15.12 L15.51,20.88 L20,23.76 L24.49,20.88 Z" fill="#000"/>
+      <g stroke="#000" stroke-width="0.96" stroke-linecap="round">
+        <line x1="24.49" y1="15.12" x2="36" y2="18"/>
+        <line x1="20" y1="12.24" x2="27.36" y2="3.66"/>
+        <line x1="15.51" y1="15.12" x2="10.64" y2="3.66"/>
+        <line x1="15.51" y1="20.88" x2="2" y2="18"/>
+        <line x1="20" y1="23.76" x2="10.64" y2="32.34"/>
+        <line x1="24.49" y1="20.88" x2="27.36" y2="32.34"/>
+      </g>
+    </mask>
+  </defs>
+  <!-- Aperture icon left -->
+  <rect x="0" y="0" width="40" height="40" fill="url(#vision-h)" mask="url(#aperture-h)"/>
+  <!-- Wordmark "OPTAVIM" -->
+  <text x="50" y="27"
+        font-family="'Space Grotesk', 'Manrope', system-ui, sans-serif"
+        font-size="22"
+        font-weight="700"
+        fill="#FFFFFF"
+        letter-spacing="-0.5">OPTAVIM</text>
+</svg>

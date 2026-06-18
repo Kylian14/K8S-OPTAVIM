@@ -1,0 +1,109 @@
+{
+  "uid": "opta-exec",
+  "title": "OPTAVIM — Synthèse",
+  "tags": ["optavim", "exec"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-24h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [
+    {"title": "K8s Cluster", "type": "dashboards", "tags": ["optavim", "k8s"], "asDropdown": false, "includeVars": true, "keepTime": true},
+    {"title": "Identity (Keycloak)", "url": "/d/opta-id", "type": "link", "icon": "external link"},
+    {"title": "MariaDB", "url": "/d/opta-db-galera", "type": "link", "icon": "external link"},
+    {"title": "Ingress", "url": "/d/opta-ingress", "type": "link", "icon": "external link"}
+  ],
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0}
+  ]},
+  "panels": [
+    {
+      "id": 1, "type": "row", "title": "Vue d'ensemble", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "collapsed": false
+    },
+    {
+      "id": 2, "type": "stat", "title": "Services en ligne",
+      "gridPos": {"h": 5, "w": 4, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "count(up == 1)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#22D3EE"}, "unit": "short"}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Services en panne",
+      "gridPos": {"h": 5, "w": 4, "x": 4, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "count(up == 0)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#22D3EE", "value": null}, {"color": "#F59E0B", "value": 1}, {"color": "#EF4444", "value": 3}]}, "unit": "short"}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Membres de la base",
+      "gridPos": {"h": 5, "w": 4, "x": 8, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "mysql_global_status_wsrep_cluster_size", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#F59E0B", "value": 2}, {"color": "#22D3EE", "value": 3}]}, "unit": "short"}}
+    },
+    {
+      "id": 5, "type": "stat", "title": "Applications actives",
+      "gridPos": {"h": 5, "w": 4, "x": 12, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum(kube_pod_status_phase{phase=\"Running\"})", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#3B82F6"}, "unit": "short"}}
+    },
+    {
+      "id": 6, "type": "stat", "title": "Serveurs prêts",
+      "gridPos": {"h": 5, "w": 4, "x": 16, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum(kube_node_status_condition{condition=\"Ready\",status=\"true\"})", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#F59E0B", "value": 4}, {"color": "#22D3EE", "value": 6}]}, "unit": "short"}}
+    },
+    {
+      "id": 7, "type": "stat", "title": "Disponibilité",
+      "gridPos": {"h": 5, "w": 4, "x": 20, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "time() - max(kube_node_created)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "value"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#6366F1"}, "unit": "s"}}
+    },
+    {
+      "id": 10, "type": "row", "title": "Disponibilité des sites", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 6}, "collapsed": false
+    },
+    {
+      "id": 11, "type": "stat", "title": "Sites en ligne",
+      "gridPos": {"h": 6, "w": 12, "x": 0, "y": 7},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "probe_success{job=\"blackbox-http\"}", "refId": "A", "legendFormat": "{{instance}}", "instant": false}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background", "orientation": "auto"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#22D3EE", "value": 1}]}, "mappings": [{"options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}, "type": "value"}], "unit": "short"}}
+    },
+    {
+      "id": 12, "type": "timeseries", "title": "Latence sites (p95)",
+      "gridPos": {"h": 6, "w": 12, "x": 12, "y": 7},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "probe_duration_seconds{job=\"blackbox-http\"}", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "s"}}
+    },
+    {
+      "id": 20, "type": "row", "title": "Ressources", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13}, "collapsed": false
+    },
+    {
+      "id": 21, "type": "timeseries", "title": "CPU par serveur",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "100 * (1 - avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "percent", "min": 0, "max": 100}}
+    },
+    {
+      "id": 22, "type": "timeseries", "title": "Mémoire par serveur",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 14},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)", "refId": "A", "legendFormat": "{{instance}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "percent", "min": 0, "max": 100}}
+    }
+  ]
+}

@@ -1,0 +1,228 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nextcloud
+  namespace: apps
+  labels:
+    app: nextcloud
+    project: optavim
+spec:
+  selector:
+    app: nextcloud
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nextcloud
+  namespace: apps
+  labels:
+    app: nextcloud
+    project: optavim
+    phase: "6"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: nextcloud
+  template:
+    metadata:
+      labels:
+        app: nextcloud
+        project: optavim
+      annotations:
+        # The official nextcloud:apache image starts as root (rsyncs ~37k files
+        # into the web root and fixes permissions), then serves via apache.
+        # runAsNonRoot or a read-only root FS break that, so we skip both.
+        # The pod stays isolated by namespace + NetworkPolicy.
+        ignore-check.kube-linter.io/run-as-non-root: "apache image needs a root entrypoint and a writable web root; isolated by namespace + NetworkPolicy"
+        ignore-check.kube-linter.io/no-read-only-root-fs: "apache image rsyncs and writes the web root and its runtime dirs; isolated by namespace + NetworkPolicy"
+    spec:
+      # Pod-level seccomp baseline (RuntimeDefault) for every container and init
+      # container. We don't set runAsNonRoot: the apache entrypoint needs root.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: nextcloud
+                topologyKey: kubernetes.io/hostname
+      # Idempotent patch for the user_oidc strtolower bug (Nextcloud 33 + PHP
+      # 8.2+): getValueBool() passes a bool to strtolower(), which raises a
+      # TypeError at OIDC login. We cast to (string) before strtolower. Remove
+      # when Nextcloud goes above 33.0.2 or the bug is fixed upstream.
+      # The file lives on the NFS PV, so the patch survives restarts,
+      # but the Nextcloud entrypoint rsyncs the image at boot: this initContainer
+      # therefore replays the patch after the rsync (on the NFS, shared between the 2
+      # replicas, it applies only once thanks to the idempotent check).
+      initContainers:
+        - name: patch-user-oidc-strtolower
+          image: nextcloud:33-apache
+          command:
+            - sh
+            - -c
+            - |
+              F=/var/www/html/lib/private/Config/UserConfig.php
+              # Wait for the entrypoint rsync to finish (max 60s)
+              for i in $(seq 1 30); do
+                [ -f "$F" ] && break
+                sleep 2
+              done
+              if [ ! -f "$F" ]; then
+                echo "WARN: $F missing, patch skipped (first boot?)"
+                exit 0
+              fi
+              if grep -q "strtolower((string)\$this->getTypedValue" "$F"; then
+                echo "Patch user_oidc strtolower already applied"
+              else
+                sed -i "688s/strtolower(\$this->getTypedValue(/strtolower((string)\$this->getTypedValue(/" "$F"
+                echo "Patch user_oidc strtolower applied"
+                sed -n 688p "$F"
+              fi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+            # No read-only root FS: the nextcloud entrypoint rsyncs into the
+            # (PVC-mounted) web root and may touch the image rootfs.
+          resources:
+            requests: {cpu: "50m", memory: "32Mi"}
+            limits:   {cpu: "100m", memory: "64Mi"}
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/html
+      containers:
+        - name: nextcloud
+          image: nextcloud:33-apache    # latest stable version (2026-04-24)
+          # seccomp RuntimeDefault and no privilege escalation are safe here.
+          # We don't drop caps or force non-root: the entrypoint needs root to
+          # rsync the web root and fix permissions before apache drops to
+          # www-data. Forcing either would crash-loop the pod. The web root has
+          # to stay writable for the same reason; isolated by namespace + NetworkPolicy.
+          # apache binds :80 (NET_BIND_SERVICE) + entrypoint chown/setuid of the web root.
+          # drop:[ALL] alone made the :80 bind fail (observed in runtime testing).
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "NET_BIND_SERVICE"]
+            seccompProfile:
+              type: RuntimeDefault
+          ports:
+            - name: http
+              containerPort: 80
+          env:
+            # ── Database (Galera) ──────────────────────────────────
+            - name: MYSQL_HOST
+              value: "galera.databases.svc.cluster.local"
+            - name: MYSQL_DATABASE
+              value: "nextcloud_db"
+            - name: MYSQL_USER
+              value: "nextcloud"
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nextcloud-secret
+                  key: MYSQL_PASSWORD
+            # ── Redis (file locking + sessions) ────────────────────
+            - name: REDIS_HOST
+              value: "redis.databases.svc.cluster.local"
+            - name: REDIS_HOST_PORT
+              value: "6379"
+            # ── Initial admin ──────────────────────────────────────
+            - name: NEXTCLOUD_ADMIN_USER
+              value: "admin"
+            - name: NEXTCLOUD_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: nextcloud-secret
+                  key: NEXTCLOUD_ADMIN_PASSWORD
+            - name: NEXTCLOUD_TRUSTED_DOMAINS
+              value: "cloud.optavim.corp"
+            # ── Behind Traefik at the TLS edge ─────────────────────
+            - name: OVERWRITEPROTOCOL
+              value: "https"
+            - name: OVERWRITEHOST
+              value: "cloud.optavim.corp"
+            # After the install, run once:
+            #   php occ config:system:set allow_local_remote_servers --value=true --type=boolean
+            # Without it, user_oidc fails with "violates local access rules" because
+            # auth.optavim.corp resolves to the HAProxy VIP 10.1.50.100 (private RFC1918).
+            # The setting is written to config.php on the NFS PV, it survives restarts.
+            - name: TRUSTED_PROXIES
+              value: "10.200.0.0/16 10.201.0.0/16"
+            - name: APACHE_DISABLE_REWRITE_IP
+              value: "1"
+            # We do not validate the self-signed cert for LDAPS to AD
+            # (10.1.20.x:636). user_ldap uses a single multi-URI config
+            # "ldaps://10.1.20.1 ldaps://10.1.20.2 ldaps://10.1.20.3" to
+            # fail over in ~6s when 2 of 3 DCs are down.
+            - name: LDAPTLS_REQCERT
+              value: "never"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          # We mount all of /var/www/html on NFS: the Nextcloud entrypoint
+          # detects an existing install via version.php at the root (not
+          # in config/). With a partial subPath, version.php is not
+          # persisted and Nextcloud retries the install on every startup.
+          # Trade-off: rsync of 37k files onto NFS on first boot
+          # (~18 min). Subsequent boots are fast (incremental rsync).
+          volumeMounts:
+            - name: data
+              mountPath: /var/www/html
+            # AD CS cert so PHP LDAP (user_ldap to DC-AD-DC-01:636)
+            # trusts it. ConfigMap "nextcloud-ldap-ca" created via
+            # kubectl create configmap.
+            - name: ldap-ca
+              mountPath: /etc/ldap/ldap.conf
+              subPath: ldap.conf
+              readOnly: true
+            - name: ldap-ca
+              mountPath: /etc/ldap/optavim-ca.pem
+              subPath: optavim-ca.pem
+              readOnly: true
+          startupProbe:
+            tcpSocket:
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 180     # up to 30 min for the first boot
+          readinessProbe:
+            httpGet:
+              path: /status.php
+              port: 80
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /status.php
+              port: 80
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: pv-nextcloud-data
+        - name: ldap-ca
+          configMap:
+            name: nextcloud-ldap-ca

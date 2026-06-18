@@ -1,0 +1,59 @@
+##############################################################################
+# OPTAVIM: patch the `auth/keycloak` StatefulSet to mount the `optavim` theme
+#
+# Strategic merge patch:
+#   - Adds the `theme-optavim` volume (configMap keycloak-theme-optavim)
+#   - volumeMounts with subPath to rebuild the tree under
+#     /opt/keycloak/themes/optavim/
+#   - The theme cache stays active in prod; to iterate on the CSS, disable it
+#     temporarily (see the operational notes below).
+#
+# Apply:
+#   kubectl patch sts -n auth keycloak --patch-file 02-statefulset-patch.yaml
+##############################################################################
+
+spec:
+  template:
+    spec:
+      volumes:
+        - name: theme-optavim
+          configMap:
+            name: keycloak-theme-optavim
+            defaultMode: 0644
+
+      containers:
+        - name: keycloak
+          # WARNING DO NOT PUT `env:` here. An empty env block (comments only)
+          # is interpreted as `null` by the strategic merge patch and wipes
+          # all existing env vars of the StatefulSet. A lost KC_HOSTNAME gives
+          # "Strict hostname resolution configured but no hostname setting provided"
+          # then crashloop. See incident 2026-06-08.
+          #
+          # Operational notes:
+          # - Theme cache ACTIVE in prod (~10x perf gain). To iterate on the CSS:
+          #     kubectl set env sts -n auth keycloak \
+          #       KC_SPI_THEME_CACHE_THEMES=false KC_SPI_THEME_CACHE_TEMPLATES=false
+          # - Do NOT set KC_SPI_THEME_DEFAULT=optavim (the `optavim` theme has
+          #   no welcome/ section, it breaks the welcome page).
+
+          volumeMounts:
+            - name: theme-optavim
+              mountPath: /opt/keycloak/themes/optavim/login/theme.properties
+              subPath: login.theme.properties
+              readOnly: true
+            - name: theme-optavim
+              mountPath: /opt/keycloak/themes/optavim/login/resources/css/login.css
+              subPath: login.login.css
+              readOnly: true
+            - name: theme-optavim
+              mountPath: /opt/keycloak/themes/optavim/login/messages/messages_fr.properties
+              subPath: login.messages_fr.properties
+              readOnly: true
+            - name: theme-optavim
+              mountPath: /opt/keycloak/themes/optavim/account/theme.properties
+              subPath: account.theme.properties
+              readOnly: true
+            - name: theme-optavim
+              mountPath: /opt/keycloak/themes/optavim/account/resources/css/account.css
+              subPath: account.account.css
+              readOnly: true

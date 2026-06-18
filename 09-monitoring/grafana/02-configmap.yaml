@@ -1,0 +1,62 @@
+---
+# Auto-provisioned Prometheus datasource
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+  labels:
+    app: grafana
+    project: optavim
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.monitoring.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+---
+# Dashboard providers, 2 sources:
+#   - "optavim"  : K8s as-code dashboards (ConfigMap grafana-dashboards-optavim
+#                  mounted at /var/lib/grafana/dashboards-cm), read-only,
+#                  auto-reload every 30s when the ConfigMap changes.
+#   - "user"     : dashboards editable manually by users via the UI
+#                  (persisted on the NFS PV under /var/lib/grafana/dashboards).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-provider
+  namespace: monitoring
+  labels:
+    app: grafana
+    project: optavim
+data:
+  provider.yaml: |
+    apiVersion: 1
+    providers:
+      - name: optavim
+        orgId: 1
+        folder: 'OPTAVIM'
+        type: file
+        disableDeletion: true
+        editable: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          path: /var/lib/grafana/dashboards-cm
+          foldersFromFilesStructure: false
+
+      - name: user
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        updateIntervalSeconds: 60
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards
+          foldersFromFilesStructure: false

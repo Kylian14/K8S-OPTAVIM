@@ -1,0 +1,15 @@
+---
+# ResourceQuota for the auth namespace
+# (aligned with the quota observed in the ingress namespace)
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota-auth
+  namespace: auth
+spec:
+  hard:
+    requests.cpu: "2"
+    requests.memory: "4Gi"
+    limits.cpu: "4"
+    limits.memory: "6Gi"
+    pods: "10"

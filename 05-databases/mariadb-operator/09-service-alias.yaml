@@ -1,0 +1,48 @@
+##############################################################################
+# OPTAVIM: "galera" Service alias to the mariadb-operator pods
+# Namespace: databases
+#
+# To apply after validating Phase 2 (Phase 3).
+# Lets the 5 apps (Keycloak, Nextcloud, Dolibarr, OrangeHRM, privacyIDEA)
+# keep pointing at galera.databases.svc.cluster.local:3306 with no
+# config change: nothing to touch on the apps side.
+#
+# Cutover steps (Phase 3):
+#   1. Rename the old `galera` Service to `galera-old`:
+#      kubectl get svc galera -n databases -o yaml > /tmp/galera-old.yaml
+#      sed -i 's/name: galera$/name: galera-old/' /tmp/galera-old.yaml
+#      kubectl delete svc galera -n databases
+#      kubectl apply -f /tmp/galera-old.yaml
+#   2. Apply this manifest -> `galera` Service pointing at the mariadb-operator pods.
+#   3. Rollback: kubectl delete svc galera ; kubectl apply of the old yaml.
+##############################################################################
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: galera
+  namespace: databases
+  labels:
+    project: optavim
+    purpose: app-compat-alias
+  annotations:
+    optavim.corp/alias-to: "mariadb-galera (mariadb-operator managed)"
+    optavim.corp/phase: "3"
+    # The matching pods (app.kubernetes.io/instance=mariadb-galera) are created
+    # at runtime by the MariaDB CR (03-mariadb-cr.yaml) via mariadb-operator,
+    # so they are absent from static manifests -> dangling-service is expected.
+    ignore-check.kube-linter.io/dangling-service: "selector targets operator-managed mariadb-galera pods created at runtime by the MariaDB CR; not present in static manifests"
+spec:
+  type: ClusterIP
+  # Selector for the mariadb-operator pods, created by the MariaDB CR.
+  # We match the 3 pods (parity with the old "galera" Service, no pin to
+  # pod-0). Galera multi-master accepts writes on any pod, and K8s
+  # load-balances naturally across the 3 endpoints.
+  selector:
+    app.kubernetes.io/instance: mariadb-galera
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+      protocol: TCP

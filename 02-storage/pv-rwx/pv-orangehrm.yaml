@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-orangehrm-data
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-client
+  nfs:
+    server: 10.1.30.100
+    path: /data/exports/orangehrm
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pv-orangehrm-data
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 5Gi

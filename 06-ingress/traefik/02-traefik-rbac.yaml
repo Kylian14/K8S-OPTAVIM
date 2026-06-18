@@ -1,0 +1,76 @@
+# ==============================================================================
+# Traefik RBAC
+# ServiceAccount + ClusterRole + ClusterRoleBinding
+# Traefik must be able to read Services, Endpoints, Secrets, IngressRoutes
+# in all namespaces to route traffic to the apps.
+# ==============================================================================
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traefik
+  namespace: ingress
+  labels:
+    app: traefik
+    phase: "5"
+    project: optavim
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: traefik
+  labels:
+    app: traefik
+    phase: "5"
+    project: optavim
+rules:
+  # Native Kubernetes: read network resources
+  # trivy:ignore:KSV-0041 Traefik requires get/list/watch on secrets cluster-wide to read TLS certificate secrets referenced by IngressRoutes; read-only, no write/delete verbs.
+  - apiGroups: [""]
+    resources:
+      - services
+      - endpoints
+      - secrets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources:
+      - ingresses
+      - ingressclasses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources:
+      - ingresses/status
+    verbs: ["update"]
+  # Traefik CRDs
+  - apiGroups: ["traefik.io"]
+    resources:
+      - ingressroutes
+      - ingressroutetcps
+      - ingressrouteudps
+      - middlewares
+      - middlewaretcps
+      - tlsoptions
+      - tlsstores
+      - traefikservices
+      - serverstransports
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: traefik
+  labels:
+    app: traefik
+    phase: "5"
+    project: optavim
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: traefik
+subjects:
+  - kind: ServiceAccount
+    name: traefik
+    namespace: ingress

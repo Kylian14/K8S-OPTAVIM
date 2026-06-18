@@ -1,0 +1,33 @@
+# NFS PV+PVC for /etc/privacyidea (configs + encrypted keys + enckey)
+# NFS export created on NFS-02 (DRBD primary): /data/exports/privacyidea
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv-privacyidea-config
+  labels:
+    app: privacyidea
+    project: optavim
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nfs-client
+  nfs:
+    server: 10.1.30.100   # VIP NFS HA (DRBD + Pacemaker)
+    path: /data/exports/privacyidea
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pv-privacyidea-config
+  namespace: identity
+spec:
+  storageClassName: nfs-client
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: pv-privacyidea-config

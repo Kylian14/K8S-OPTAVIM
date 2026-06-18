@@ -1,0 +1,90 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orangehrm-ldap-sync
+  namespace: apps
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orangehrm-ldap-sync
+  namespace: apps
+# trivy:ignore:KSV-0053 pods/exec is required by design: the LDAP->OrangeHRM sync
+# has no API of its own, so the CronJob runs `php bin/console orangehrm:ldap-sync-user`
+# via `kubectl exec` INTO the running orangehrm app pod. Scope is minimised:
+# namespaced Role (not ClusterRole), only get/list pods + create/get pods/exec in
+# `apps`, bound to a dedicated orangehrm-ldap-sync ServiceAccount.
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orangehrm-ldap-sync
+  namespace: apps
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: orangehrm-ldap-sync
+subjects:
+  - kind: ServiceAccount
+    name: orangehrm-ldap-sync
+    namespace: apps
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: orangehrm-ldap-sync
+  namespace: apps
+  labels:
+    app: orangehrm
+    component: ldap-sync
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 7200   # finished jobs auto-cleaned after 2h
+      template:
+        metadata:
+          annotations:
+            ignore-check.kube-linter.io/run-as-non-root: "alpine/k8s kubectl helper; runs read-only get/list + exec into app pod, isolated to apps namespace"
+        spec:
+          # Pod-level securityContext (KSV-0118): RuntimeDefault seccomp baseline.
+          securityContext:
+            seccompProfile:
+              type: RuntimeDefault
+          restartPolicy: Never
+          serviceAccountName: orangehrm-ldap-sync
+          automountServiceAccountToken: true   # required: kubectl uses the SA token to exec into the app pod
+          containers:
+            - name: ldap-sync
+              image: alpine/k8s:1.30.5
+              # Baseline hardening for the kubectl helper. Not forced non-root /
+              # read-only-fs: kubectl writes a discovery/HTTP cache under $HOME.
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                requests: {cpu: "50m", memory: "64Mi"}
+                limits: {cpu: "200m", memory: "128Mi"}
+              command:
+                - /bin/bash
+                - -c
+                - |
+                  set -e
+                  POD=$(kubectl get pod -n apps -l app=orangehrm -o jsonpath="{.items[0].metadata.name}")
+                  echo "[$(date -Iseconds)] Sync via pod $POD"
+                  kubectl exec -n apps "$POD" -- env LDAPTLS_REQCERT=never bash -c "cd /var/www/html && php bin/console orangehrm:ldap-sync-user"
+                  echo "[$(date -Iseconds)] Done"

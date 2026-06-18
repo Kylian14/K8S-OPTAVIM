@@ -1,0 +1,63 @@
+{
+  "uid": "opta-db-redis",
+  "title": "OPTAVIM — Cache Redis",
+  "tags": ["optavim", "db"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-3h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0}
+  ]},
+  "links": [{"title": "Executive", "url": "/d/opta-exec", "type": "link", "icon": "external link"}],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Service Redis",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "redis_up", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#22D3EE", "value": 1}]}, "mappings": [{"options": {"0": {"text": "DOWN"}, "1": {"text": "UP"}}, "type": "value"}]}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Clients connectés",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "redis_connected_clients", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#3B82F6"}, "unit": "short"}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Mémoire utilisée",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "redis_memory_used_bytes", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#22D3EE"}, "unit": "bytes"}}
+    },
+    {
+      "id": 4, "type": "stat", "title": "Clés stockées",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum(redis_db_keys)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#6366F1"}, "unit": "short"}}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Taux de succès du cache",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "100 * rate(redis_keyspace_hits_total[5m]) / (rate(redis_keyspace_hits_total[5m]) + rate(redis_keyspace_misses_total[5m]))", "refId": "A", "legendFormat": "hit ratio %"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "percent", "min": 0, "max": 100}}
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Commandes par seconde",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "rate(redis_commands_processed_total[5m])", "refId": "A", "legendFormat": "cmds/s"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "ops"}}
+    }
+  ]
+}

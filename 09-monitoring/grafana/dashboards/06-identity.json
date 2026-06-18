@@ -1,0 +1,57 @@
+{
+  "uid": "opta-id",
+  "title": "OPTAVIM — Identité (SSO & MFA)",
+  "tags": ["optavim", "identity"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-3h", "to": "now"},
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "templating": {"list": [
+    {"name": "datasource", "type": "datasource", "query": "prometheus", "current": {"text": "Prometheus", "value": "Prometheus"}, "hide": 0}
+  ]},
+  "links": [{"title": "Executive", "url": "/d/opta-exec", "type": "link", "icon": "external link"}],
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Service authentification",
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum(up{namespace=\"auth\",app=\"keycloak\"})", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "#EF4444", "value": null}, {"color": "#F59E0B", "value": 1}, {"color": "#22D3EE", "value": 2}]}}}
+    },
+    {
+      "id": 2, "type": "stat", "title": "Mémoire utilisée",
+      "gridPos": {"h": 5, "w": 8, "x": 8, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "sum(base_memory_usedHeap_bytes)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#3B82F6"}, "unit": "bytes"}}
+    },
+    {
+      "id": 3, "type": "stat", "title": "Charge CPU moyenne",
+      "gridPos": {"h": 5, "w": 8, "x": 16, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "avg(base_cpu_systemLoadAverage)", "refId": "A", "instant": true}],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"]}, "colorMode": "background"},
+      "fieldConfig": {"defaults": {"color": {"mode": "fixed", "fixedColor": "#22D3EE"}, "unit": "none"}}
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "Mémoire dans le temps",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [
+        {"expr": "base_memory_usedHeap_bytes", "refId": "A", "legendFormat": "{{pod}}"}
+      ],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "bytes"}}
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Nettoyage mémoire",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "prometheus", "uid": "$datasource"},
+      "targets": [{"expr": "rate(base_gc_total[5m])", "refId": "A", "legendFormat": "{{pod}}"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "unit": "ops"}}
+    }
+  ]
+}

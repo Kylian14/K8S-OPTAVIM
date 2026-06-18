@@ -1,0 +1,37 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: nextcloud-https
+  namespace: apps
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`cloud.optavim.corp`)
+      kind: Rule
+      services:
+        - name: nextcloud
+          namespace: apps
+          port: 80
+  tls:
+    secretName: optavim-wildcard-tls
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: nextcloud-http
+  namespace: apps
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`cloud.optavim.corp`)
+      kind: Rule
+      middlewares:
+        - name: redirect-https
+          namespace: ingress
+      services:
+        - name: nextcloud
+          namespace: apps
+          port: 80

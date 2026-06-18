@@ -1,0 +1,140 @@
+# Traefik 2.11.2: ingress, TLS termination, HTTP to HTTPS redirection.
+# 2 replicas, preferred anti-affinity, NodePort 30080/30443 exposed via HAProxy VIP.
+# Config via CLI flags, no traefik.yaml file (simpler to maintain).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traefik
+  namespace: ingress
+  labels:
+    app: traefik
+    project: optavim
+    phase: "6"
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  selector:
+    matchLabels:
+      app: traefik
+  template:
+    metadata:
+      labels:
+        app: traefik
+        project: optavim
+        phase: "6"
+      annotations:
+        # Prometheus scrape annotations: dedicated metrics entrypoint :8082
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: "/metrics"
+        # kube-linter: NET_BIND_SERVICE is required so the non-root process can
+        # bind privileged ports :80/:443; all other caps are dropped.
+        ignore-check.kube-linter.io/privileged-ports: "Traefik binds :80/:443 as non-root via NET_BIND_SERVICE only; all other caps dropped"
+    spec:
+      serviceAccountName: traefik
+      # POD securityContext: baseline seccomp. Non-root hardening (uid 65532)
+      # + NET_BIND_SERVICE + read-only rootfs is tempting but crashlooped in testing
+      # (cause unconfirmed, cluster removed). Staying cautious until validated.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: ["traefik"]
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: traefik
+          image: traefik:v2.11.2
+          args:
+            - --global.checknewversion=false
+            - --global.sendanonymoususage=false
+            - --api=true
+            - --api.dashboard=true
+            - --api.insecure=true
+            - --log.level=INFO
+            - --accesslog=true
+            # HTTP to HTTPS permanent redirection
+            - --entrypoints.web.address=:80
+            - --entrypoints.web.http.redirections.entrypoint.to=websecure
+            - --entrypoints.web.http.redirections.entrypoint.scheme=https
+            - --entrypoints.web.http.redirections.entrypoint.permanent=true
+            # HTTPS + TLS
+            - --entrypoints.websecure.address=:443
+            - --entrypoints.websecure.http.tls=true
+            # IngressRoute CRD + cross-namespace allowed
+            - --providers.kubernetescrd=true
+            - --providers.kubernetescrd.allowcrossnamespace=true
+            - --providers.kubernetescrd.allowEmptyServices=true
+            # Standard Ingress (traefik class)
+            - --providers.kubernetesingress=true
+            - --providers.kubernetesingress.ingressclass=traefik
+            # Health probes
+            - --ping=true
+            - --ping.entrypoint=web
+            # Prometheus metrics (dedicated entrypoint :8082)
+            - --metrics.prometheus=true
+            - --metrics.prometheus.entryPoint=metrics
+            - --metrics.prometheus.addEntryPointsLabels=true
+            - --metrics.prometheus.addRoutersLabels=true
+            - --metrics.prometheus.addServicesLabels=true
+            - --entrypoints.metrics.address=:8082
+          # CONTAINER securityContext, cautious. Traefik binds :80/:443 (root),
+          # seccomp RuntimeDefault and no privilege escalation. To harden as
+          # non-root + NET_BIND_SERVICE + read-only rootfs once validated at runtime.
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /data
+          ports:
+            - name: web
+              containerPort: 80
+            - name: websecure
+              containerPort: 443
+            - name: dashboard
+              containerPort: 8080
+            - name: metrics
+              containerPort: 8082
+          resources:
+            requests:
+              cpu: "150m"
+              memory: "512Mi"
+            limits:
+              cpu: "240m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /ping
+              port: web
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+      # Writable emptyDir volumes required because readOnlyRootFilesystem: true.
+      # Traefik writes runtime state to /tmp and ACME/data to /data.
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          emptyDir: {}

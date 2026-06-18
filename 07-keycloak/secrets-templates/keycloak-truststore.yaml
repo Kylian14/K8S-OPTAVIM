@@ -1,0 +1,30 @@
+# Keycloak truststore to connect to AD over LDAPS.
+# Holds the AD CS root certificate (optavim-DC-AD-DC-01-CA) + the DC cert
+# in PEM format (Keycloak 24 loads PEM / P12 files, not JKS).
+#
+# Rebuild:
+#   # 1. Get the AD CS root cert (via ClusterAdcsIssuer or openssl)
+#   kubectl get clusteradcsissuer adcs-optavim \
+#     -o jsonpath='{.spec.caBundle}' | base64 -d > /tmp/root-ca.pem
+#   # 2. Get the DC LDAPS chain
+#   openssl s_client -showcerts -connect 10.1.20.1:636 </dev/null 2>/dev/null \
+#     | awk '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/' \
+#     > /tmp/dc-chain.pem
+#   # 3. Concatenate
+#   cat /tmp/root-ca.pem /tmp/dc-chain.pem > /tmp/ad-full.pem
+#   # 4. Create the secret
+#   kubectl create secret generic keycloak-truststore -n auth \
+#     --from-file=ca.pem=/tmp/ad-full.pem --dry-run=client -o yaml \
+#     | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-truststore
+  namespace: auth
+  labels:
+    app: keycloak
+    project: optavim
+type: Opaque
+stringData:
+  # Concatenated PEM content (root CA + DC cert)
+  ca.pem: "CHANGE_ME_pem_cert_chain"

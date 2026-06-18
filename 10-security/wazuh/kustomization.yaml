@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - 01-secret.yaml
+  - 02-certs-config.yaml
+  - 03-certs-job.yaml
+  - 04-indexer.yaml
+  - 05-manager.yaml
+  - 06-dashboard.yaml
+  - 07-ingressroute.yaml
